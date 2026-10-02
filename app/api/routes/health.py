@@ -7,7 +7,6 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from app.api.deps import get_container
-from app.config import EvidenceSource
 from app.container import Container
 
 logger = logging.getLogger(__name__)
@@ -34,20 +33,14 @@ async def ready(container: Container = Depends(get_container)) -> JSONResponse:
         logger.warning("readiness_database_failed", extra={"error_type": type(exc).__name__})
         checks["database"] = False
 
-    checks["api_keys_configured"] = bool(settings.api_keys)
+    checks["admin_key_configured"] = bool(settings.admin_api_keys)
+    # Required to store the clients' Binance API keys (encrypted).
+    checks["encryption_key"] = False
     if container.cipher is not None:
         try:
             checks["encryption_key"] = container.cipher.self_test()
         except Exception:
             checks["encryption_key"] = False
-    if settings.payment_evidence_source is EvidenceSource.BINANCE_API:
-        checks["binance_api_configured"] = settings.binance_api_configured
-    else:
-        checks["binance_senders_configured"] = settings.binance_senders_configured
-        checks["binance_templates_enabled"] = bool(container.parser.templates)
-        checks["mail_account_configured"] = bool(settings.gmail_email) or (
-            container.oauth_client.configured and container.cipher is not None
-        )
 
     ok = all(checks.values())
     return JSONResponse(

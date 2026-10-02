@@ -7,7 +7,15 @@ from sqlalchemy import text
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-TABLES = ("mail_accounts", "email_messages", "payments", "payment_claims", "rate_limit_counters")
+TABLES = (
+    "tenants",
+    "api_tokens",
+    "binance_credentials",
+    "payments",
+    "payment_claims",
+    "evidence_sync_state",
+    "rate_limit_counters",
+)
 
 
 async def test_rls_enabled_on_all_tables(
@@ -42,14 +50,9 @@ async def test_rls_denies_rows_even_if_privileges_are_regranted(
 ) -> None:
     """Supabase default grants could give anon SELECT again: RLS still returns nothing."""
     async with engine.connect() as conn:
-        await conn.execute(
-            text(
-                "INSERT INTO mail_accounts (provider, email, auth_type, enabled, mailbox) "
-                "VALUES ('gmail', 'rls@gmail.com', 'app_password', true, 'INBOX')"
-            )
-        )
-        await conn.execute(text("GRANT SELECT ON mail_accounts TO anon"))
+        await conn.execute(text("INSERT INTO tenants (name, enabled) VALUES ('rls-test', true)"))
+        await conn.execute(text("GRANT SELECT ON tenants TO anon"))
         await conn.execute(text("SET LOCAL ROLE anon"))
-        count = (await conn.execute(text("SELECT count(*) FROM mail_accounts"))).scalar()
+        count = (await conn.execute(text("SELECT count(*) FROM tenants"))).scalar()
         await conn.rollback()  # undo the grant and the row
     assert count == 0

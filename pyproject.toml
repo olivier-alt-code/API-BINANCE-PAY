@@ -1,7 +1,7 @@
 [project]
 name = "binance-pay-verifier"
 version = "0.1.0"
-description = "Verifies Binance payments using authenticated Binance notification emails received in Gmail."
+description = "Private, multi-client API that verifies Binance Pay payments via the official Binance Pay history API."
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [

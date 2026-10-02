@@ -3,7 +3,7 @@
 This uses a normal Binance account API key (no merchant account), created with ONLY the
 "Enable Reading" permission. Each Binance Pay transfer is returned with its
 ``transactionId`` (e.g. ``P_A99TESTPAYX71116``), which is what the payer can quote and
-what the notification email does NOT contain.
+what the Binance notification email does NOT contain.
 
 * Requests are signed with HMAC-SHA256 over the query string (``X-MBX-APIKEY`` header).
 * Amounts are parsed as :class:`~decimal.Decimal` (never float).
@@ -36,6 +36,7 @@ from app.core.exceptions import AppError
 logger = logging.getLogger(__name__)
 
 PAY_TRANSACTIONS_PATH = "/sapi/v1/pay/transactions"
+API_RESTRICTIONS_PATH = "/sapi/v1/account/apiRestrictions"
 SERVER_TIME_PATH = "/api/v3/time"
 PAGE_LIMIT = 100  # API maximum
 MAX_WINDOW_MS = 90 * 24 * 3600 * 1000  # API maximum interval between startTime and endTime
@@ -55,6 +56,56 @@ class BinanceApiError(AppError):
 
 class BinanceAuthError(BinanceApiError):
     public_message = "Binance API key rejected (check key, permissions and IP whitelist)"
+
+
+@dataclass(frozen=True)
+class KeyPermissions:
+    """Result of ``GET /sapi/v1/account/apiRestrictions`` (weight 1)."""
+
+    enable_reading: bool
+    ip_restricted: bool
+    # Every permission that could move or trade funds. Must ALL be false.
+    dangerous: dict[str, bool]
+
+    @property
+    def read_only(self) -> bool:
+        return self.enable_reading and not any(self.dangerous.values())
+
+    @property
+    def problems(self) -> list[str]:
+        issues = [] if self.enable_reading else ["enableReading must be ON"]
+        issues += [f"{name} must be OFF" for name, on in self.dangerous.items() if on]
+        return issues
+
+    def as_dict(self) -> dict[str, bool]:
+        return {
+            "enableReading": self.enable_reading,
+            "ipRestrict": self.ip_restricted,
+            **self.dangerous,
+        }
+
+
+# Permissions that allow trading, withdrawing or moving funds. A key with any of them is
+# rejected: we only ever need to READ the Pay history.
+DANGEROUS_PERMISSIONS = (
+    "enableWithdrawals",
+    "enableInternalTransfer",
+    "permitsUniversalTransfer",
+    "enableSpotAndMarginTrading",
+    "enableMargin",
+    "enableFutures",
+    "enableVanillaOptions",
+    "enablePortfolioMarginTrading",
+)
+
+
+def parse_key_permissions(body: dict[str, Any]) -> KeyPermissions:
+    return KeyPermissions(
+        enable_reading=bool(body.get("enableReading", False)),
+        ip_restricted=bool(body.get("ipRestrict", False)),
+        # Unknown/missing flags are treated as OFF; present ones are taken literally.
+        dangerous={name: bool(body.get(name, False)) for name in DANGEROUS_PERMISSIONS},
+    )
 
 
 @dataclass(frozen=True)
@@ -215,6 +266,12 @@ class BinancePayHistoryClient:
             code=numeric_code,
             retryable=False,
         )
+
+    async def key_permissions(self) -> KeyPermissions:
+        body = await self._signed_get(API_RESTRICTIONS_PATH, {})
+        if not isinstance(body, dict):
+            raise BinanceApiError("Unexpected apiRestrictions response", retryable=False)
+        return parse_key_permissions(body)
 
     async def fetch_page(self, start: datetime, end: datetime) -> list[PayTransaction]:
         body = await self._signed_get(

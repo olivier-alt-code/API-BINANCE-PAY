@@ -236,3 +236,33 @@ async def test_window_larger_than_90_days_rejected() -> None:
 def test_json_numbers_never_become_floats() -> None:
     body = json.loads('{"amount": 98.814}', parse_float=Decimal)
     assert isinstance(body["amount"], Decimal)
+
+
+def test_key_permissions_read_only_detection() -> None:
+    from app.integrations.binance.account_api import parse_key_permissions
+
+    read_only = parse_key_permissions({"enableReading": True, "ipRestrict": True})
+    assert read_only.read_only and read_only.ip_restricted and read_only.problems == []
+
+    trading = parse_key_permissions(
+        {"enableReading": True, "enableSpotAndMarginTrading": True, "enableWithdrawals": True}
+    )
+    assert not trading.read_only
+    assert trading.problems == [
+        "enableWithdrawals must be OFF",
+        "enableSpotAndMarginTrading must be OFF",
+    ]
+    assert not parse_key_permissions({"enableReading": False}).read_only
+
+
+async def test_key_permissions_endpoint_is_signed() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"enableReading": True, "ipRestrict": False})
+
+    perms = await make_client(handler).key_permissions()
+    assert perms.read_only
+    assert seen[0].url.path == "/sapi/v1/account/apiRestrictions"
+    assert "signature=" in str(seen[0].url) and seen[0].headers["X-MBX-APIKEY"] == KEY

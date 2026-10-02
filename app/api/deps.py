@@ -3,14 +3,33 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 
 from fastapi import Depends, HTTPException, Request, Response, status
+from fastapi.security import HTTPAuthorizationCredentials
 
 from app.container import Container
-from app.core.security import client_ip
+from app.core.security import bearer_scheme, client_ip, unauthorized
+from app.services.tenants import AuthContext
 
 
 def get_container(request: Request) -> Container:
     container: Container = request.app.state.container
     return container
+
+
+async def require_client(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+) -> AuthContext:
+    """Authenticate a client by its private token (``Authorization: Bearer bpv_…``)."""
+    if credentials is None:
+        raise unauthorized()
+    context = await get_container(request).tenants.authenticate(credentials.credentials)
+    if context is None:
+        raise unauthorized()
+    return context
+
+
+async def client_rate_key(context: AuthContext = Depends(require_client)) -> str:
+    return f"token:{context.token_id}"
 
 
 def rate_limit(

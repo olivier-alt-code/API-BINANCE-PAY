@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import os
-from collections.abc import AsyncIterator, Callable, Sequence
-from datetime import datetime
+from collections.abc import AsyncIterator, Callable
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -14,41 +16,38 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from app.config import Settings
 from app.core.encryption import generate_key
-from app.core.exceptions import MailProviderError, MailTimeoutError
-from app.integrations.mail.base import FetchedMessage, MailAccountConfig, MailboxInfo
+from app.integrations.binance.account_api import (
+    BinanceAuthError,
+    KeyPermissions,
+    PayTransaction,
+    parse_key_permissions,
+)
 
-FIXTURES = Path(__file__).parent / "fixtures" / "binance"
-API_KEY = "test-api-key-0123456789-abcdefghijklmnop"
 ADMIN_KEY = "test-admin-key-0123456789-abcdefghijklmn"
 TEST_DATABASE_URL = os.environ.get(
     "TEST_DATABASE_URL", "postgresql+psycopg://postgres:postgres@localhost:5432/binance_pay_test"
 )
 ENCRYPTION_KEY = generate_key()
 
-
-def fixture_bytes(name: str) -> bytes:
-    return (FIXTURES / name).read_bytes()
+# Synthetic Binance credentials (same shape as real ones).
+READ_ONLY_KEY = "rokey" + "A" * 59
+READ_ONLY_SECRET = "rosecret" + "B" * 56
+OTHER_KEY = "otherkey" + "C" * 56
+OTHER_SECRET = "othersecret" + "D" * 53
 
 
 def make_settings(**overrides: Any) -> Settings:
     values: dict[str, Any] = {
         "app_env": "test",
         "database_url": SecretStr(TEST_DATABASE_URL),
-        "api_keys": [SecretStr(API_KEY)],
         "admin_api_keys": [SecretStr(ADMIN_KEY)],
         "credentials_encryption_key": SecretStr(ENCRYPTION_KEY),
-        "gmail_email": "merchant@gmail.com",
-        "gmail_auth_method": "app_password",
-        "gmail_app_password": SecretStr("abcd efgh ijkl mnop"),
-        "binance_allowed_domains": ["binance.example"],
-        "binance_allow_simulated_templates": True,
-        "mail_on_demand_min_interval_seconds": 0,
-        "mail_sync_lock_wait_seconds": 2,
+        "sync_lock_wait_seconds": 2,
+        "binance_api_min_interval_seconds": 1,
         "log_json": False,
-        # Existing suites exercise the email source; Binance API suites override this.
-        "payment_evidence_source": "email",
         "rate_limit_verify_per_minute": 1000,
         "rate_limit_admin_per_minute": 1000,
+        "rate_limit_credentials_per_minute": 1000,
     }
     values.update(overrides)
     return Settings(_env_file=None, **values)  # type: ignore[call-arg]
@@ -59,86 +58,99 @@ def settings() -> Settings:
     return make_settings()
 
 
-# --- Fake mailbox -----------------------------------------------------------------------
+# --- Fake Binance (several accounts, each with its own API key) ---------------------------
 
 
-class FakeMailbox:
-    """In-memory IMAP mailbox shared by every FakeMailProvider (like a real server)."""
+READ_ONLY = {"enableReading": True, "ipRestrict": False}
 
+
+@dataclass
+class FakeAccount:
+    api_secret: str
+    permissions: dict[str, Any] = field(default_factory=lambda: dict(READ_ONLY))
+    transactions: list[PayTransaction] = field(default_factory=list)
+    calls: list[tuple[datetime, datetime]] = field(default_factory=list)
+    fail: Exception | None = None
+    delay: float = 0.0
+
+    def add(
+        self,
+        transaction_id: str,
+        amount: str,
+        currency: str = "USDT",
+        *,
+        when: datetime | None = None,
+        order_type: str = "C2C",
+        payer: str | None = "User-0000aaaa",
+    ) -> None:
+        self.transactions.append(
+            PayTransaction(
+                order_type=order_type,
+                transaction_id=transaction_id,
+                transaction_time=when or datetime.now(UTC).replace(microsecond=0),
+                amount=Decimal(amount),
+                currency=currency,
+                payer_name=payer,
+                payer_binance_id=None,
+            )
+        )
+
+
+class FakeBinanceClient:
+    def __init__(self, binance: FakeBinance, api_key: str, api_secret: str) -> None:
+        self._binance = binance
+        self._key = api_key
+        self._secret = api_secret
+
+    def _account(self) -> FakeAccount:
+        account = self._binance.accounts.get(self._key)
+        if account is None or account.api_secret != self._secret:
+            raise BinanceAuthError("Invalid API-key", code=-2015, retryable=False)
+        if account.fail is not None:
+            raise account.fail
+        return account
+
+    async def key_permissions(self) -> KeyPermissions:
+        return parse_key_permissions(self._account().permissions)
+
+    async def fetch_page(self, start: datetime, end: datetime) -> list[PayTransaction]:
+        account = self._account()
+        return [t for t in account.transactions if start <= t.transaction_time <= end]
+
+    async def fetch_transactions(
+        self, start: datetime, end: datetime, *, max_pages: int = 20
+    ) -> list[PayTransaction]:
+        account = self._account()
+        account.calls.append((start, end))
+        if account.delay:
+            await asyncio.sleep(account.delay)
+        return [t for t in account.transactions if start <= t.transaction_time <= end]
+
+
+class FakeBinance:
     def __init__(self) -> None:
-        self.uidvalidity = 1
-        self.messages: dict[int, bytes] = {}
-        self.next_uid = 1
-        self.fail: Exception | None = None
-        self.connect_delay = 0.0
-        self.connections = 0
-        self.fetches = 0
-        self.last_search: dict[str, Any] = {}
+        self.accounts: dict[str, FakeAccount] = {
+            READ_ONLY_KEY: FakeAccount(api_secret=READ_ONLY_SECRET),
+            OTHER_KEY: FakeAccount(api_secret=OTHER_SECRET),
+        }
+        self.clients_built = 0
 
-    def add(self, raw: bytes) -> int:
-        uid = self.next_uid
-        self.messages[uid] = raw
-        self.next_uid += 1
-        return uid
-
-
-class FakeMailProvider:
-    def __init__(self, mailbox: FakeMailbox, account: MailAccountConfig) -> None:
-        self._box = mailbox
-        self._account = account
-        self.connected = False
+    def factory(self, api_key: SecretStr, api_secret: SecretStr) -> FakeBinanceClient:
+        self.clients_built += 1
+        return FakeBinanceClient(self, api_key.get_secret_value(), api_secret.get_secret_value())
 
     @property
-    def provider_name(self) -> str:
-        return "gmail"
+    def main(self) -> FakeAccount:
+        return self.accounts[READ_ONLY_KEY]
 
     @property
-    def account_email(self) -> str:
-        return self._account.email
-
-    async def connect(self) -> MailboxInfo:
-        self._box.connections += 1
-        if self._box.connect_delay:
-            await asyncio.sleep(self._box.connect_delay)
-        if self._box.fail is not None:
-            raise self._box.fail
-        self.connected = True
-        return MailboxInfo(self._account.mailbox, self._box.uidvalidity, self._box.next_uid)
-
-    async def search_messages(
-        self, *, after_uid: int | None, since: datetime | None, from_filters: Sequence[str]
-    ) -> list[int]:
-        self._box.last_search = {"after_uid": after_uid, "since": since, "filters": from_filters}
-        return sorted(u for u in self._box.messages if after_uid is None or u > after_uid)
-
-    async def get_message(self, uid: int) -> FetchedMessage | None:
-        self._box.fetches += 1
-        raw = self._box.messages.get(uid)
-        return FetchedMessage(uid, raw) if raw is not None else None
-
-    async def close(self) -> None:
-        self.connected = False
-
-
-class FakeProviderFactory:
-    def __init__(self, mailbox: FakeMailbox) -> None:
-        self.mailbox = mailbox
-
-    def build(self, account: MailAccountConfig) -> FakeMailProvider:
-        return FakeMailProvider(self.mailbox, account)
+    def other(self) -> FakeAccount:
+        return self.accounts[OTHER_KEY]
 
 
 @pytest.fixture
-def mailbox() -> FakeMailbox:
-    return FakeMailbox()
-
-
-@pytest.fixture
-def failing_errors() -> dict[str, Exception]:
-    return {
-        "down": MailProviderError("IMAP connection failed"),
-        "timeout": MailTimeoutError("IMAP operation timed out"),
-    }
+def binance() -> FakeBinance:
+    return FakeBinance()
 
 
 # --- Database ---------------------------------------------------------------------------
@@ -152,7 +164,6 @@ def _run_migrations(url: str) -> None:
     cfg = Config(str(Path(__file__).parents[1] / "alembic.ini"))
     cfg.set_main_option("script_location", str(Path(__file__).parents[1] / "alembic"))
     cfg.cmd_opts = type("Opts", (), {"x": [f"url={url}"]})()  # type: ignore[assignment]
-    command.downgrade(cfg, "base")
     command.upgrade(cfg, "head")
 
 
@@ -168,8 +179,11 @@ async def engine() -> AsyncIterator[AsyncEngine]:
     except Exception as exc:  # pragma: no cover - environment dependent
         await eng.dispose()
         pytest.skip(f"PostgreSQL not available for integration tests: {type(exc).__name__}")
-    # Simulate Supabase's public API roles so the RLS/REVOKE migration is exercised.
     async with eng.begin() as conn:
+        # Fresh schema every session (migrations are not reversible past 0004).
+        await conn.execute(text("DROP SCHEMA public CASCADE"))
+        await conn.execute(text("CREATE SCHEMA public"))
+        # Simulate Supabase's public API roles so the RLS/REVOKE migrations are exercised.
         await conn.execute(
             text(
                 "DO $$ BEGIN "
@@ -179,6 +193,7 @@ async def engine() -> AsyncIterator[AsyncEngine]:
                 "THEN CREATE ROLE authenticated NOLOGIN; END IF; END $$"
             )
         )
+        await conn.execute(text("GRANT USAGE ON SCHEMA public TO anon, authenticated"))
     await asyncio.to_thread(_run_migrations, TEST_DATABASE_URL)
     yield eng
     await eng.dispose()
@@ -189,8 +204,8 @@ async def sessionmaker(engine: AsyncEngine) -> AsyncIterator[async_sessionmaker[
     async with engine.begin() as conn:
         await conn.execute(
             text(
-                "TRUNCATE payment_claims, payments, email_messages, mail_accounts, "
-                "rate_limit_counters, evidence_sync_state RESTART IDENTITY CASCADE"
+                "TRUNCATE payment_claims, payments, evidence_sync_state, binance_credentials, "
+                "api_tokens, tenants, rate_limit_counters RESTART IDENTITY CASCADE"
             )
         )
     yield async_sessionmaker(engine, expire_on_commit=False, autoflush=False)
@@ -200,74 +215,44 @@ async def sessionmaker(engine: AsyncEngine) -> AsyncIterator[async_sessionmaker[
 def build(
     engine: AsyncEngine,
     sessionmaker: async_sessionmaker[AsyncSession],
-    mailbox: FakeMailbox,
+    binance: FakeBinance,
 ) -> Callable[..., Any]:
-    """Build a fully wired container against the test DB and the fake mailbox."""
+    """Build a fully wired container against the test DB and the fake Binance."""
     from app.container import build_container
 
-    def _build(*, pay_history_client: Any = None, **overrides: Any) -> Any:
+    def _build(**overrides: Any) -> Any:
         return build_container(
-            make_settings(**overrides),
-            engine,
-            sessionmaker,
-            provider_factory=FakeProviderFactory(mailbox),
-            pay_history_client=pay_history_client,
+            make_settings(**overrides), engine, sessionmaker, client_factory=binance.factory
         )
 
     return _build
 
 
-# --- Fake Binance Pay history API -------------------------------------------------------
+@dataclass
+class ClientHandle:
+    tenant_id: int
+    token: str
+    token_id: int
 
-
-class FakePayHistoryClient:
-    """In-memory stand-in for BinancePayHistoryClient (same interface as the real one)."""
-
-    def __init__(self) -> None:
-        from app.integrations.binance.account_api import PayTransaction
-
-        self._cls = PayTransaction
-        self.transactions: list[Any] = []
-        self.calls: list[tuple[datetime, datetime]] = []
-        self.fail: Exception | None = None
-        self.delay = 0.0
-
-    def add(
-        self,
-        transaction_id: str,
-        amount: str,
-        currency: str = "USDT",
-        *,
-        when: datetime | None = None,
-        order_type: str = "C2C",
-        payer: str | None = "User-0000aaaa",
-    ) -> None:
-        from datetime import UTC
-        from decimal import Decimal
-
-        self.transactions.append(
-            self._cls(
-                order_type=order_type,
-                transaction_id=transaction_id,
-                transaction_time=when or datetime.now(UTC).replace(microsecond=0),
-                amount=Decimal(amount),
-                currency=currency,
-                payer_name=payer,
-                payer_binance_id=None,
-            )
-        )
-
-    async def fetch_transactions(
-        self, start: datetime, end: datetime, *, max_pages: int = 20
-    ) -> list[Any]:
-        self.calls.append((start, end))
-        if self.delay:
-            await asyncio.sleep(self.delay)
-        if self.fail is not None:
-            raise self.fail
-        return [t for t in self.transactions if start <= t.transaction_time <= end]
+    @property
+    def auth(self) -> dict[str, str]:
+        return {"Authorization": f"Bearer {self.token}"}
 
 
 @pytest.fixture
-def pay_api() -> FakePayHistoryClient:
-    return FakePayHistoryClient()
+def new_client(build: Callable[..., Any]) -> Callable[..., Any]:
+    """Create a client (+ token) and, by default, register its read-only Binance key."""
+
+    async def _new(
+        name: str = "olivier",
+        *,
+        api_key: str | None = READ_ONLY_KEY,
+        api_secret: str = READ_ONLY_SECRET,
+    ) -> ClientHandle:
+        container = build()
+        tenant, issued = await container.tenants.create_tenant(name)
+        if api_key is not None:
+            await container.credentials.save(tenant.id, SecretStr(api_key), SecretStr(api_secret))
+        return ClientHandle(tenant.id, issued.token, issued.id)
+
+    return _new

@@ -1,7 +1,7 @@
 """Binance Pay (Merchant) API — PREPARED, NOT ENABLED.
 
 Structure for a future ``BinancePayApiProvider`` that queries the official Binance Pay
-API instead of reading emails. It produces the same :class:`PaymentEvidence` as the email
+Merchant API. It produces the same :class:`PaymentEvidence` as the Pay history
 provider, so :class:`app.services.payment_verifier.PaymentVerifier` does not change.
 
 Not wired into the application yet (no merchant credentials available). Before enabling:
@@ -30,8 +30,7 @@ from pydantic import SecretStr
 
 from app.core.exceptions import EvidenceProviderUnavailableError
 from app.db.models import PaymentSource
-from app.integrations.binance.evidence import PaymentEvidence
-from app.integrations.binance.templates import PaymentStatus
+from app.integrations.binance.evidence import PaymentEvidence, PaymentStatus
 
 BINANCE_PAY_BASE_URL = "https://bpay.binanceapi.com"
 ORDER_QUERY_PATH = "/binancepay/openapi/v2/order/query"
@@ -142,7 +141,7 @@ class BinancePayClient:
 
 # Persists the order as a ``payments`` row (source=BINANCE_PAY_API) and returns its id, so
 # the same transactional claim applies. To be implemented with PaymentRepository.store().
-PersistOrder = Callable[[str, BinancePayOrder, PaymentStatus], Awaitable[int]]
+PersistOrder = Callable[[int, str, BinancePayOrder, PaymentStatus], Awaitable[int]]
 
 
 class BinancePayApiProvider:
@@ -154,14 +153,14 @@ class BinancePayApiProvider:
         self._client = client
         self._persist = persist
 
-    async def find_payment(self, payment_code: str) -> PaymentEvidence | None:
+    async def find_payment(self, tenant_id: int, payment_code: str) -> PaymentEvidence | None:
         order = await self._client.query_order(merchant_trade_no=payment_code)
         if order is None or order.merchant_trade_no != payment_code:
             return None
         status = order.normalized_status()
         if status is None or order.transact_time is None:
             return None  # unknown status: never guess
-        evidence_id = await self._persist(payment_code, order, status)
+        evidence_id = await self._persist(tenant_id, payment_code, order, status)
         return PaymentEvidence(
             evidence_id=evidence_id,
             external_id=order.transaction_id or order.prepay_id or payment_code,

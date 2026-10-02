@@ -5,21 +5,20 @@ import logging
 import pytest
 from pydantic import SecretStr, ValidationError
 
-from app.config import GmailAuthMethod
 from app.core.encryption import CredentialCipher, generate_key
 from app.core.exceptions import ConfigurationError, EncryptionError
-from app.core.logging import REDACTED, JsonFormatter, RedactionFilter, mask_email
-from tests.conftest import make_settings
+from app.core.logging import REDACTED, JsonFormatter, RedactionFilter
+from tests.conftest import ADMIN_KEY, make_settings
 
 # --- Encryption -------------------------------------------------------------------------
 
 
 def test_encrypt_roundtrip_and_ciphertext_hides_plaintext() -> None:
     cipher = CredentialCipher(generate_key())
-    token = cipher.encrypt(b"refresh-token-value", "mail_account:a@b.c:oauth2")
+    token = cipher.encrypt(b"refresh-token-value", "tenant:1:binance-credentials")
     assert b"refresh-token-value" not in token.encode()
     assert token.startswith("v1.")
-    assert cipher.decrypt(token, "mail_account:a@b.c:oauth2") == b"refresh-token-value"
+    assert cipher.decrypt(token, "tenant:1:binance-credentials") == b"refresh-token-value"
 
 
 def test_nonce_is_random() -> None:
@@ -63,42 +62,21 @@ def test_encryption_errors_never_contain_secrets() -> None:
 # --- Config ----------------------------------------------------------------------------
 
 
-def test_normal_google_password_is_rejected_as_app_password() -> None:
-    with pytest.raises(ValidationError, match="App Password"):
-        make_settings(gmail_app_password=SecretStr("MyNormalPassw0rd!"))
-
-
-def test_app_password_spaces_are_normalized() -> None:
-    s = make_settings(gmail_app_password=SecretStr("abcd efgh ijkl mnop"))
-    assert s.gmail_app_password is not None
-    assert s.gmail_app_password.get_secret_value() == "abcdefghijklmnop"
-
-
-def test_account_password_method_is_disabled_by_default() -> None:
-    with pytest.raises(ValidationError, match="disabled"):
-        make_settings(gmail_auth_method=GmailAuthMethod.ACCOUNT_PASSWORD)
-    s = make_settings(
-        gmail_auth_method=GmailAuthMethod.ACCOUNT_PASSWORD,
-        gmail_account_password_auth_enabled=True,
-    )
-    assert s.gmail_auth_method is GmailAuthMethod.ACCOUNT_PASSWORD
-
-
-def test_short_api_keys_rejected() -> None:
+def test_short_admin_keys_rejected() -> None:
     with pytest.raises(ValidationError):
-        make_settings(api_keys=[SecretStr("short")])
+        make_settings(admin_api_keys=[SecretStr("short")])
 
 
 def test_settings_repr_does_not_leak_secrets() -> None:
     s = make_settings()
-    assert "abcdefghijklmnop" not in repr(s)
-    assert "abcdefghijklmnop" not in str(s.model_dump())
+    assert ADMIN_KEY not in repr(s)
+    assert ADMIN_KEY not in str(s.model_dump())
+    assert ADMIN_KEY in s.secret_values()  # registered for log redaction
 
 
-def test_simulated_templates_off_in_production_by_default() -> None:
-    s = make_settings(app_env="production", binance_allow_simulated_templates=None)
-    assert not s.simulated_templates_allowed
-    assert not s.docs_enabled
+def test_docs_off_in_production_by_default() -> None:
+    assert not make_settings(app_env="production").docs_enabled
+    assert make_settings(app_env="production", enable_docs=True).docs_enabled
 
 
 def test_float_tolerance_rejected() -> None:
@@ -148,16 +126,11 @@ def test_redaction_of_bearer_and_xoauth_and_tracebacks() -> None:
     assert "eyJhbGciOi" not in r2.getMessage() and "ya29.tok" not in r2.getMessage()
 
 
-def test_mask_email() -> None:
-    assert mask_email("john.doe@gmail.com") == "jo******@gmail.com"
-    assert mask_email("ab@x.com") == "a***@x.com"
-
-
 def test_env_example_is_loadable() -> None:
     from pathlib import Path
 
     from app.config import Settings
 
     s = Settings(_env_file=Path(__file__).parents[2] / ".env.example")  # type: ignore[call-arg]
-    assert s.gmail_app_password is None and s.cors_allowed_origins == []
-    assert s.email_trusted_authserv_ids == ["mx.google.com"]
+    assert s.admin_api_keys == [] and s.cors_allowed_origins == []
+    assert s.binance_pay_order_types == ["C2C"] and s.payment_code_case_insensitive

@@ -9,27 +9,31 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, Response
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from app.api.routes import binance, gmail, health, payments
+from app.api.routes import admin, health, me, payments
 from app.config import Settings, get_settings
 from app.container import Container, build_container
 from app.core.logging import configure_logging
 from app.core.security import BodySizeLimitMiddleware, SecurityHeadersMiddleware
 from app.db.session import get_engine, get_sessionmaker
-from app.workers.mail_sync_worker import run_sync_loop
+from app.workers.sync_worker import run_sync_loop
 
 logger = logging.getLogger("app")
 
 DESCRIPTION = """
-Verifies payments received on Binance by reading **authenticated** Binance notification
-emails from Gmail (IMAP over SSL, App Password or OAuth2/XOAUTH2).
+Verifies payments received on Binance using the official Binance Pay trade history API
+(`GET /sapi/v1/pay/transactions`) of each client's own account (read-only API key).
 
-* `POST /v1/payments/verify` — exact code + Decimal amount + asset + time window, then an
+* **Owner** (`ADMIN_API_KEYS`): `/v1/admin/*` creates clients and issues/revokes their
+  private tokens.
+* **Clients** (`Authorization: Bearer bpv_…`): register their read-only Binance key with
+  `PUT /v1/me/binance-credentials`, then call `POST /v1/payments/verify`.
+* Verification: exact transaction id + Decimal amount + asset + time window, then an
   **atomic claim** so one payment can never pay two orders.
-* Authentication: `Authorization: Bearer <API_KEY>` (admin endpoints use admin keys).
 """
 
 
@@ -83,6 +87,16 @@ def create_app(settings: Settings | None = None, container: Container | None = N
     if settings.allowed_hosts:
         app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.allowed_hosts)
 
+    @app.exception_handler(RequestValidationError)
+    async def validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
+        # FastAPI's default 422 body echoes the submitted values ("input"), which could be
+        # a Binance API secret. Return only location, message and type.
+        errors = [
+            {"loc": list(e.get("loc", ())), "msg": e.get("msg", ""), "type": e.get("type", "")}
+            for e in exc.errors()
+        ]
+        return JSONResponse(status_code=422, content={"detail": errors})
+
     @app.middleware("http")
     async def access_log(
         request: Request, call_next: Callable[[Request], Awaitable[Response]]
@@ -112,8 +126,8 @@ def create_app(settings: Settings | None = None, container: Container | None = N
 
     app.include_router(health.router)
     app.include_router(payments.router)
-    app.include_router(gmail.router)
-    app.include_router(binance.router)
+    app.include_router(me.router)
+    app.include_router(admin.router)
     return app
 
 

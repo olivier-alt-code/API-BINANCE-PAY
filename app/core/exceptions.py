@@ -1,6 +1,6 @@
 """Domain exceptions.
 
-Exception messages must NEVER contain secrets (passwords, tokens, keys, raw emails).
+Exception messages must NEVER contain secrets (passwords, tokens, API keys/secrets).
 They are written to logs and may be forwarded to error trackers.
 """
 
@@ -21,26 +21,8 @@ class EncryptionError(AppError):
     public_message = "Credential encryption error"
 
 
-class MailProviderError(AppError):
-    """The mailbox could not be reached or the IMAP conversation failed."""
-
-    public_message = "Mail provider unavailable"
-
-
-class MailAuthenticationError(MailProviderError):
-    public_message = "Mail provider authentication failed"
-
-
-class MailTimeoutError(MailProviderError):
-    public_message = "Mail provider timeout"
-
-
-class OAuthError(AppError):
-    public_message = "OAuth flow failed"
-
-
 class EvidenceProviderUnavailableError(AppError):
-    """The payment evidence source (Gmail, Binance Pay API...) is unavailable."""
+    """The payment evidence source (Binance API...) is unavailable."""
 
     public_message = "Payment evidence provider unavailable"
 
@@ -51,7 +33,7 @@ class EvidenceSyncPendingError(AppError):
     public_message = "Payment evidence synchronization in progress"
 
 
-class BinanceEmailParseError(AppError):
-    """The email could not be parsed unambiguously as a Binance payment notification."""
+class EvidenceNotConfiguredError(AppError):
+    """The tenant has not configured its evidence source (e.g. no Binance API key)."""
 
-    public_message = "Unrecognized Binance email"
+    public_message = "Binance API key not configured for this client"

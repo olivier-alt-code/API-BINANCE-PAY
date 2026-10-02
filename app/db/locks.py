@@ -11,7 +11,6 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 # Advisory lock namespaces (first int of the two-int form).
-MAIL_SYNC_LOCK_NAMESPACE = 727_001
 BINANCE_API_SYNC_LOCK_NAMESPACE = 727_002
 
 

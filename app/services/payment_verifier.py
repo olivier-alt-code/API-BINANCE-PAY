@@ -1,7 +1,8 @@
 """Payment verification use case.
 
-Depends only on :class:`PaymentEvidenceProvider` (emails today, Binance Pay API later) and
-on :class:`PaymentClaimService`. Any doubt results in a *non-verified* status.
+Depends only on :class:`PaymentEvidenceProvider` (Binance Pay trade history today, the
+Merchant API later) and on :class:`PaymentClaimService`. Every verification is scoped to
+one client (tenant). Any doubt results in a *non-verified* status.
 """
 
 from __future__ import annotations
@@ -14,10 +15,12 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
 
-from app.core.exceptions import EvidenceProviderUnavailableError, EvidenceSyncPendingError
-from app.db.models import PaymentSource
-from app.integrations.binance.evidence import PaymentEvidenceProvider
-from app.integrations.binance.templates import PaymentStatus
+from app.core.exceptions import (
+    EvidenceNotConfiguredError,
+    EvidenceProviderUnavailableError,
+    EvidenceSyncPendingError,
+)
+from app.integrations.binance.evidence import PaymentEvidenceProvider, PaymentStatus
 from app.services.payment_claim import ClaimStatus, PaymentClaimService
 
 logger = logging.getLogger(__name__)
@@ -31,12 +34,12 @@ class VerificationStatus(StrEnum):
     PENDING_SYNC = "PENDING_SYNC"
     AMOUNT_MISMATCH = "AMOUNT_MISMATCH"
     ASSET_MISMATCH = "ASSET_MISMATCH"
-    UNTRUSTED_EMAIL = "UNTRUSTED_EMAIL"
+    UNTRUSTED_EVIDENCE = "UNTRUSTED_EVIDENCE"
     EXPIRED_PAYMENT = "EXPIRED_PAYMENT"
     ALREADY_CLAIMED = "ALREADY_CLAIMED"
     INVALID_PAYMENT_CODE = "INVALID_PAYMENT_CODE"
-    MAIL_PROVIDER_UNAVAILABLE = "MAIL_PROVIDER_UNAVAILABLE"
     BINANCE_API_UNAVAILABLE = "BINANCE_API_UNAVAILABLE"
+    BINANCE_NOT_CONFIGURED = "BINANCE_NOT_CONFIGURED"
     # Extensions (documented in README): evidence exists but cannot be accepted.
     PAYMENT_NOT_COMPLETED = "PAYMENT_NOT_COMPLETED"
     AMBIGUOUS_PAYMENT = "AMBIGUOUS_PAYMENT"
@@ -46,7 +49,6 @@ RETRYABLE = frozenset(
     {
         VerificationStatus.NOT_FOUND,
         VerificationStatus.PENDING_SYNC,
-        VerificationStatus.MAIL_PROVIDER_UNAVAILABLE,
         VerificationStatus.BINANCE_API_UNAVAILABLE,
         VerificationStatus.PAYMENT_NOT_COMPLETED,
     }
@@ -55,6 +57,7 @@ RETRYABLE = frozenset(
 
 @dataclass(frozen=True)
 class VerificationRequest:
+    tenant_id: int
     payment_code: str
     expected_amount: Decimal
     asset: str
@@ -127,6 +130,7 @@ class PaymentVerifier:
             logger.info(
                 "payment_verification",
                 extra={
+                    "tenant_id": request.tenant_id,
                     "payment_code": code,
                     "status": status.value,
                     "order_reference": request.order_reference,
@@ -139,17 +143,17 @@ class PaymentVerifier:
         if not PAYMENT_CODE_RE.fullmatch(code):
             return result(VerificationStatus.INVALID_PAYMENT_CODE, detail="Invalid code format")
 
-        # 2-4. Find evidence (DB first, then on-demand mailbox sync inside the provider).
+        # 2-4. Find evidence (DB first, then an on-demand Binance query inside the provider).
         try:
-            evidence = await self._provider.find_payment(code)
+            evidence = await self._provider.find_payment(request.tenant_id, code)
         except EvidenceSyncPendingError:
-            return result(VerificationStatus.PENDING_SYNC, detail="Mailbox sync in progress")
+            return result(VerificationStatus.PENDING_SYNC, detail="Binance sync in progress")
+        except EvidenceNotConfiguredError:
+            return result(
+                VerificationStatus.BINANCE_NOT_CONFIGURED,
+                detail="Register your read-only Binance API key: PUT /v1/me/binance-credentials",
+            )
         except EvidenceProviderUnavailableError:
-            if self._provider.source is PaymentSource.BINANCE_EMAIL:
-                return result(
-                    VerificationStatus.MAIL_PROVIDER_UNAVAILABLE,
-                    detail="Mail provider unavailable",
-                )
             return result(
                 VerificationStatus.BINANCE_API_UNAVAILABLE, detail="Binance API unavailable"
             )
@@ -167,7 +171,7 @@ class PaymentVerifier:
         }
         # 5. Authenticity of the evidence.
         if not evidence.trusted:
-            return result(VerificationStatus.UNTRUSTED_EMAIL, detail="Evidence is not trusted")
+            return result(VerificationStatus.UNTRUSTED_EVIDENCE, detail="Evidence is not trusted")
         if evidence.ambiguous:
             return result(
                 VerificationStatus.AMBIGUOUS_PAYMENT,

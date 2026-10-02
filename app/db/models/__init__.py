@@ -1,4 +1,13 @@
-"""ORM models. PostgreSQL is the single source of truth for messages, payments and claims."""
+"""ORM models. PostgreSQL (Supabase) is the single source of truth.
+
+Multi-client ("tenant") model:
+
+* :class:`Tenant` — a client of this API (you, or someone you share it with).
+* :class:`ApiToken` — private access tokens of a tenant. Only a SHA-256 hash is stored.
+* :class:`BinanceCredential` — the tenant's read-only Binance API key, AES-GCM encrypted.
+* :class:`Payment` / :class:`PaymentClaim` / :class:`EvidenceSyncState` — always scoped to
+  one tenant: a tenant can only see and claim payments received on its own Binance account.
+"""
 
 from __future__ import annotations
 
@@ -31,79 +40,52 @@ from app.db.base import Base, TimestampMixin
 MONEY = Numeric(38, 18)
 
 
-class MailAuthType(StrEnum):
-    APP_PASSWORD = "app_password"  # noqa: S105 - enum label
-    OAUTH2 = "oauth2"
-    ACCOUNT_PASSWORD = "account_password"  # noqa: S105 - enum label
-
-
 class PaymentSource(StrEnum):
-    BINANCE_EMAIL = "BINANCE_EMAIL"
     BINANCE_PAY_API = "BINANCE_PAY_API"  # Binance Pay Merchant API (prepared, not enabled)
     BINANCE_PAY_HISTORY = "BINANCE_PAY_HISTORY"  # account API GET /sapi/v1/pay/transactions
 
 
-class MessageParseStatus(StrEnum):
-    PARSED = "PARSED"
-    NOT_BINANCE_SENDER = "NOT_BINANCE_SENDER"
-    NO_TEMPLATE = "NO_TEMPLATE"
-    PARSE_ERROR = "PARSE_ERROR"
-
-
-class MailAccount(TimestampMixin, Base):
-    __tablename__ = "mail_accounts"
+class Tenant(TimestampMixin, Base):
+    __tablename__ = "tenants"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    provider: Mapped[str] = mapped_column(String(32), nullable=False, default="gmail")
-    email: Mapped[str] = mapped_column(String(320), nullable=False, unique=True)
-    auth_type: Mapped[str] = mapped_column(String(32), nullable=False)
-    # AES-256-GCM envelope (see app.core.encryption). NEVER plaintext.
-    encrypted_credentials: Mapped[str | None] = mapped_column(Text, nullable=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    mailbox: Mapped[str] = mapped_column(String(255), nullable=False, default="INBOX")
-    imap_uidvalidity: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
-    last_imap_uid: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
-    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    last_sync_error: Mapped[str | None] = mapped_column(String(255))
+
+
+class ApiToken(TimestampMixin, Base):
+    __tablename__ = "api_tokens"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[int] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    # First characters of the token, safe to display ("bpv_Ab3dE…") to identify it.
+    prefix: Mapped[str] = mapped_column(String(16), nullable=False)
+    # SHA-256 of the full token. The token itself is shown once and never stored.
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (Index("ix_api_tokens_tenant_id", "tenant_id"),)
+
+
+class BinanceCredential(TimestampMixin, Base):
+    __tablename__ = "binance_credentials"
+
+    tenant_id: Mapped[int] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), primary_key=True
+    )
+    # AES-256-GCM envelope of {"api_key": ..., "api_secret": ...}. NEVER plaintext.
+    encrypted: Mapped[str] = mapped_column(Text, nullable=False)
+    api_key_hint: Mapped[str] = mapped_column(String(16), nullable=False)  # last 4 chars
+    ip_restricted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    permissions: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    verified_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
-    )
-
-    __table_args__ = (
-        CheckConstraint(
-            "auth_type IN ('app_password', 'oauth2', 'account_password')", name="auth_type"
-        ),
-    )
-
-
-class EmailMessage(TimestampMixin, Base):
-    __tablename__ = "email_messages"
-
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    mail_account_id: Mapped[int] = mapped_column(
-        ForeignKey("mail_accounts.id", ondelete="CASCADE"), nullable=False
-    )
-    imap_uidvalidity: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    imap_uid: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    message_id: Mapped[str | None] = mapped_column(String(998))
-    sender: Mapped[str | None] = mapped_column(String(320))
-    subject: Mapped[str | None] = mapped_column(String(500))
-    received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    trusted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    trust_details: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
-    parse_status: Mapped[str] = mapped_column(String(32), nullable=False)
-    template: Mapped[str | None] = mapped_column(String(64))
-    body_hash: Mapped[str] = mapped_column(String(64), nullable=False)
-    # Only populated when STORE_RAW_EMAILS=true, and encrypted even then.
-    raw_encrypted: Mapped[str | None] = mapped_column(Text)
-    processed_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
-
-    __table_args__ = (
-        UniqueConstraint("mail_account_id", "imap_uidvalidity", "imap_uid"),
-        UniqueConstraint("mail_account_id", "message_id"),
-        Index("ix_email_messages_received_at", "received_at"),
     )
 
 
@@ -111,11 +93,11 @@ class Payment(TimestampMixin, Base):
     __tablename__ = "payments"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[int] = mapped_column(
+        ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+    )
     source: Mapped[str] = mapped_column(String(32), nullable=False)
     external_id: Mapped[str] = mapped_column(String(998), nullable=False)
-    email_message_id: Mapped[int | None] = mapped_column(
-        ForeignKey("email_messages.id", ondelete="RESTRICT"), nullable=True
-    )
     payment_code: Mapped[str] = mapped_column(String(128), nullable=False)
     amount: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
     asset: Mapped[str] = mapped_column(String(16), nullable=False)
@@ -124,7 +106,6 @@ class Payment(TimestampMixin, Base):
     trusted: Mapped[bool] = mapped_column(Boolean, nullable=False)
     # Set when two trusted sources disagree about the same payment_code.
     ambiguous: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    template: Mapped[str | None] = mapped_column(String(64))
     # Counterparty as reported by Binance (audit only; never used for matching).
     payer_name: Mapped[str | None] = mapped_column(String(128))
     payer_binance_id: Mapped[str | None] = mapped_column(String(64))
@@ -132,14 +113,14 @@ class Payment(TimestampMixin, Base):
     claim: Mapped[PaymentClaim | None] = relationship(back_populates="payment", lazy="raise")
 
     __table_args__ = (
-        Index("ix_payments_payment_code", "payment_code"),
+        Index("ix_payments_tenant_id_payment_code", "tenant_id", "payment_code"),
         Index("ix_payments_received_at", "received_at"),
-        Index("ix_payments_email_message_id", "email_message_id"),
-        # One payment per (source, external id): re-processing the same email is a no-op.
-        UniqueConstraint("source", "external_id"),
-        # At most ONE trusted payment per code. Prevents double evidence for the same code.
+        # One payment per (tenant, source, external id): re-importing is a no-op.
+        UniqueConstraint("tenant_id", "source", "external_id"),
+        # At most ONE trusted payment per code and tenant.
         Index(
-            "uq_payments_trusted_payment_code",
+            "uq_payments_tenant_trusted_payment_code",
+            "tenant_id",
             "payment_code",
             unique=True,
             postgresql_where=text("trusted"),
@@ -170,10 +151,13 @@ class PaymentClaim(Base):
 
 
 class EvidenceSyncState(Base):
-    """Incremental cursor for API-based evidence sources (shared by all replicas)."""
+    """Incremental cursor of an evidence source, per tenant (shared by all replicas)."""
 
     __tablename__ = "evidence_sync_state"
 
+    tenant_id: Mapped[int] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), primary_key=True
+    )
     source: Mapped[str] = mapped_column(String(32), primary_key=True)
     cursor_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -191,13 +175,12 @@ class RateLimitCounter(Base):
 
 
 __all__ = [
-    "EmailMessage",
+    "ApiToken",
+    "BinanceCredential",
     "EvidenceSyncState",
-    "MailAccount",
-    "MailAuthType",
-    "MessageParseStatus",
     "Payment",
     "PaymentClaim",
     "PaymentSource",
     "RateLimitCounter",
+    "Tenant",
 ]
