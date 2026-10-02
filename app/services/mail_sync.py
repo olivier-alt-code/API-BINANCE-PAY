@@ -157,30 +157,39 @@ class MailSyncService:
     # --- locking ----------------------------------------------------------------------
     @asynccontextmanager
     async def _account_lock(self, account_id: int, wait_seconds: float) -> AsyncIterator[bool]:
-        """Session-level advisory lock on a dedicated connection (released on disconnect)."""
+        """Cross-replica lock for one mail account, held on a dedicated connection.
+
+        * Direct connection / session pooler: session-level advisory lock (released on
+          unlock or automatically if the connection drops).
+        * Supabase transaction pooler (Supavisor, port 6543): a backend connection is only
+          pinned for the duration of a transaction, so a *transaction-scoped* advisory lock
+          is taken inside a transaction kept open for the whole sync.
+        """
+        xact = self._settings.database.transaction_pooler
+        fn = "pg_try_advisory_xact_lock" if xact else "pg_try_advisory_lock"
+        params = {"ns": _LOCK_NAMESPACE, "id": account_id}
         async with self._engine.connect() as conn:
             deadline = time.monotonic() + wait_seconds
             acquired = False
             while True:
                 acquired = bool(
                     (
-                        await conn.execute(
-                            text("SELECT pg_try_advisory_lock(:ns, CAST(:id AS integer))"),
-                            {"ns": _LOCK_NAMESPACE, "id": account_id},
-                        )
+                        await conn.execute(text(f"SELECT {fn}(:ns, CAST(:id AS integer))"), params)
                     ).scalar()
                 )
-                await conn.commit()
+                if not (xact and acquired):
+                    await conn.commit()  # keep the transaction open only to hold an xact lock
                 if acquired or time.monotonic() >= deadline:
                     break
                 await asyncio.sleep(0.2)
             try:
                 yield acquired
             finally:
-                if acquired:
+                if acquired and xact:
+                    await conn.rollback()  # ends the transaction -> releases the xact lock
+                elif acquired:
                     await conn.execute(
-                        text("SELECT pg_advisory_unlock(:ns, CAST(:id AS integer))"),
-                        {"ns": _LOCK_NAMESPACE, "id": account_id},
+                        text("SELECT pg_advisory_unlock(:ns, CAST(:id AS integer))"), params
                     )
                     await conn.commit()
 

@@ -1,4 +1,11 @@
-# Development stack. Do NOT put real secrets here: use a local .env file (git-ignored).
+# Do NOT put real secrets here: use a local .env file (git-ignored).
+#
+# Storage is external: by default the services use DATABASE_URL from .env, i.e. your
+# Supabase project (see README "Supabase"). Nothing is persisted inside the containers.
+#
+#   docker compose up --build                     # API + worker + migrations -> Supabase
+#   docker compose --profile local-db up --build  # optional local PostgreSQL for offline dev
+#     (then set DATABASE_URL=postgresql://binance:binance@postgres:5432/binance_pay in .env)
 name: binance-pay-verifier
 
 x-app: &app
@@ -7,11 +14,11 @@ x-app: &app
     - path: .env
       required: false
   environment:
-    DATABASE_URL: postgresql+psycopg://binance:binance@postgres:5432/binance_pay
     APP_ENV: ${APP_ENV:-development}
   depends_on:
     postgres:
       condition: service_healthy
+      required: false  # only when the optional local-db profile is enabled
   read_only: true
   tmpfs:
     - /tmp
@@ -21,6 +28,7 @@ x-app: &app
 
 services:
   postgres:
+    profiles: ["local-db"]
     image: postgres:17-alpine
     environment:
       POSTGRES_USER: binance
@@ -48,6 +56,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+        required: false
       migrate:
         condition: service_completed_successfully
 
@@ -58,6 +67,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+        required: false
       migrate:
         condition: service_completed_successfully
 

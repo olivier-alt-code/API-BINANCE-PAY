@@ -166,6 +166,17 @@ async def engine() -> AsyncIterator[AsyncEngine]:
     except Exception as exc:  # pragma: no cover - environment dependent
         await eng.dispose()
         pytest.skip(f"PostgreSQL not available for integration tests: {type(exc).__name__}")
+    # Simulate Supabase's public API roles so the RLS/REVOKE migration is exercised.
+    async with eng.begin() as conn:
+        await conn.execute(
+            text(
+                "DO $$ BEGIN "
+                "IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') "
+                "THEN CREATE ROLE anon NOLOGIN; END IF; "
+                "IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') "
+                "THEN CREATE ROLE authenticated NOLOGIN; END IF; END $$"
+            )
+        )
     await asyncio.to_thread(_run_migrations, TEST_DATABASE_URL)
     yield eng
     await eng.dispose()

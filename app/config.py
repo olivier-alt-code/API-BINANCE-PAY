@@ -11,10 +11,13 @@ import re
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from functools import lru_cache
-from typing import Annotated, Self
+from typing import TYPE_CHECKING, Annotated, Literal, Self
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+if TYPE_CHECKING:
+    from app.db.connection import DatabaseConnection
 
 _APP_PASSWORD_RE = re.compile(r"^[a-z]{16}$")
 
@@ -69,6 +72,10 @@ class Settings(BaseSettings):
     database_max_overflow: int = Field(default=10, ge=0, le=100)
     database_pool_timeout_seconds: float = Field(default=10, gt=0)
     database_statement_timeout_ms: int = Field(default=15_000, ge=1_000)
+    # Supabase: TLS is required automatically; pooler mode is auto-detected (port 6543 =
+    # transaction pooler). Override only if needed.
+    database_ssl_mode: str | None = None
+    database_pooler_mode: Literal["session", "transaction"] | None = None
 
     # --- API security ----------------------------------------------------------------
     api_keys: Annotated[list[SecretStr], NoDecode] = Field(default_factory=list)
@@ -233,6 +240,18 @@ class Settings(BaseSettings):
     @property
     def binance_senders_configured(self) -> bool:
         return bool(self.binance_allowed_senders or self.binance_allowed_domains)
+
+    @property
+    def database(self) -> DatabaseConnection:
+        from app.db.connection import resolve_database  # noqa: PLC0415 - avoid import cycle
+
+        return resolve_database(
+            self.database_url.get_secret_value(),
+            ssl_mode=self.database_ssl_mode,
+            pooler_mode=self.database_pooler_mode,
+            statement_timeout_ms=self.database_statement_timeout_ms,
+            application_name=self.app_name,
+        )
 
     @property
     def amount_tolerance(self) -> Decimal:

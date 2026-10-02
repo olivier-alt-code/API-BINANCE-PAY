@@ -256,3 +256,30 @@ async def test_worker_survives_provider_failures(
     assert not task.done()
     stop.set()
     await asyncio.wait_for(task, timeout=5)
+
+
+async def test_transaction_pooler_mode_lock_and_no_duplicates(
+    build: Callable[..., Any],
+    mailbox: FakeMailbox,
+    sessionmaker: async_sessionmaker[AsyncSession],
+) -> None:
+    """Supabase Supavisor transaction mode: transaction-scoped advisory locks."""
+    a = build(database_pooler_mode="transaction")
+    b = build(database_pooler_mode="transaction")
+    await a.sync_service.ensure_env_account()
+    (account_id,) = await a.sync_service.enabled_account_ids()
+
+    async with a.sync_service._account_lock(account_id, 0) as acquired:
+        assert acquired
+        busy = await b.sync_service.sync_account(account_id, SyncMode.PERIODIC)
+    assert busy.accounts_busy == 1  # lock really held across connections
+    async with b.sync_service._account_lock(account_id, 0) as acquired:
+        assert acquired  # and released afterwards
+
+    for i in range(10):
+        mailbox.add(make_email(code=f"TXPOOL{i:03d}"))
+    mailbox.connect_delay = 0.05
+    await asyncio.gather(
+        a.sync_service.sync_all(SyncMode.MANUAL), b.sync_service.sync_all(SyncMode.MANUAL)
+    )
+    assert await _count(sessionmaker, Payment) == 10
