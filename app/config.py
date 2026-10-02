@@ -7,7 +7,6 @@ rendered by ``repr()``/``str()`` and therefore never leak into logs or traceback
 
 from __future__ import annotations
 
-import re
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from functools import lru_cache
@@ -58,8 +57,9 @@ class Settings(BaseSettings):
     database_url: SecretStr = SecretStr(
         "postgresql+psycopg://postgres:postgres@localhost:5432/binance_pay"
     )
-    database_pool_size: int = Field(default=10, ge=1, le=100)
-    database_max_overflow: int = Field(default=10, ge=0, le=100)
+    # Max DB connections per process (API or worker). With Supabase's transaction pooler
+    # a small number is enough: connections are multiplexed by Supavisor.
+    db_pool_max: int = Field(default=5, ge=2, le=100)
     database_pool_timeout_seconds: float = Field(default=10, gt=0)
     database_statement_timeout_ms: int = Field(default=15_000, ge=1_000)
     # Supabase: TLS is required automatically; pooler mode is auto-detected (port 6543 =
@@ -192,11 +192,18 @@ class Settings(BaseSettings):
             *self.credentials_encryption_previous_keys,
         ]
         values = [c.get_secret_value() for c in candidates if c is not None]
-        # Also redact the DB password alone if present in the URL.
-        url = self.database_url.get_secret_value()
-        match = re.search(r"://[^:/@]+:([^@]+)@", url)
-        if match:
-            values.append(match.group(1))
+        # Also redact the DB password alone (raw and URL-encoded forms), parsed with the
+        # same tolerant parser used to connect (passwords may contain "@", "#", "/"...).
+        from urllib.parse import quote  # noqa: PLC0415
+
+        from app.db.connection import normalize_url  # noqa: PLC0415 - avoid import cycle
+
+        try:
+            password = normalize_url(self.database_url.get_secret_value()).password
+        except Exception:
+            password = None
+        if password:
+            values += [password, quote(password, safe="")]
         return [v for v in values if len(v) >= 6]
 
 

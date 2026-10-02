@@ -6,20 +6,24 @@ connection to what Supabase offers:
 
 * accepts the URLs exactly as copied from the Supabase dashboard
   (``postgres://`` / ``postgresql://``) and selects the psycopg 3 driver;
+* tolerates passwords pasted as-is, even with special characters (``@ # / ? : %``),
+  so they do not need to be URL-encoded, and rejects the ``[YOUR-PASSWORD]`` placeholder;
 * enforces TLS (``sslmode=require``) for Supabase hosts unless set explicitly;
 * detects the Supavisor *transaction* pooler (port 6543): there, server-side prepared
   statements and startup ``options`` are not supported, and session-level advisory locks
-  are unreliable, so the app switches to transaction-scoped locks (see ``MailSyncService``).
+  are unreliable, so the app switches to transaction-scoped locks (see ``app.db.locks``).
   Session pooler (port 5432 on ``*.pooler.supabase.com``) and direct connections
   (``db.<ref>.supabase.co``) behave like plain PostgreSQL.
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, Literal
+from urllib.parse import parse_qsl, unquote
 
-from sqlalchemy.engine import URL, make_url
+from sqlalchemy.engine import URL
 
 from app.core.exceptions import ConfigurationError
 
@@ -42,20 +46,44 @@ class DatabaseConnection:
         return self.url.render_as_string(hide_password=False)
 
 
+# scheme://user:password@host[:port][/database][?query] — the password is everything
+# between the first ":" after the user and the LAST "@" before the host, so raw passwords
+# containing "@", "#", "/", "?" or ":" are accepted.
+_URL_RE = re.compile(
+    r"^(?P<scheme>[a-z0-9+]+)://(?P<user>[^:@/]+)(?::(?P<password>.*))?@"
+    r"(?P<host>[^@/:?#]+)(?::(?P<port>\d+))?(?:/(?P<database>[^?#]*))?(?:\?(?P<query>[^#]*))?$",
+    re.DOTALL,
+)
+_PLACEHOLDERS = ("[YOUR-PASSWORD]", "YOUR-PASSWORD", "<db-password>", "<password>")
+
+
 def normalize_url(raw: str) -> URL:
-    raw = raw.strip()
-    prefixes = ("postgres://", "postgresql://", "postgresql+psycopg2://", "postgresql+asyncpg://")
-    for prefix in prefixes:
-        if raw.startswith(prefix):
-            raw = _DRIVER + "://" + raw[len(prefix) :]
-            break
-    try:
-        url = make_url(raw)
-    except Exception:  # never echo or chain the URL: it contains the password
-        raise ConfigurationError("DATABASE_URL is not a valid PostgreSQL URL") from None
-    if url.drivername != _DRIVER:
+    raw = raw.strip().strip('"').strip("'")
+    if not raw:
+        raise ConfigurationError("DATABASE_URL is empty")
+    match = _URL_RE.match(raw)
+    if match is None:
+        raise ConfigurationError("DATABASE_URL is not a valid PostgreSQL URL")
+    scheme = match["scheme"]
+    if scheme not in {"postgres", "postgresql"} and not scheme.startswith("postgresql+"):
         raise ConfigurationError("DATABASE_URL must be a PostgreSQL URL")
-    return url
+    password = match["password"]
+    if password is not None and any(p in password for p in _PLACEHOLDERS):
+        raise ConfigurationError(
+            "DATABASE_URL still contains the [YOUR-PASSWORD] placeholder: replace it with "
+            "your Supabase database password (without the brackets)"
+        )
+    query = dict(parse_qsl(match["query"] or "", keep_blank_values=True))
+    return URL.create(
+        _DRIVER,
+        username=unquote(match["user"]),
+        # Accept both raw and already URL-encoded passwords.
+        password=unquote(password) if password is not None else None,
+        host=match["host"],
+        port=int(match["port"]) if match["port"] else None,
+        database=(match["database"] or None),
+        query=query,
+    )
 
 
 def resolve_database(

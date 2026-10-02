@@ -66,8 +66,8 @@ pip install -e ".[dev]"
 cp .env.example .env
 ```
 
-1. **Base de datos:** pega en `DATABASE_URL` la URL del *Session pooler* de Supabase (ver
-   [Supabase](#supabase-almacenamiento)).
+1. **Base de datos:** pega en `DATABASE_URL` la URL del *Transaction pooler* de Supabase y
+   ajusta `DB_POOL_MAX` (ver [Supabase](#supabase-almacenamiento)).
 2. **Genera tus dos secretos** y ponlos en `.env`:
 
    ```bash
@@ -234,36 +234,43 @@ ID completo y exacto. Decide este valor antes de importar pagos y no lo cambies 
 
 ## Supabase (almacenamiento)
 
-1. Crea un proyecto en <https://supabase.com/dashboard> y guarda la contraseña de la base
-   de datos.
-2. Pulsa **Connect** y copia una cadena de conexión. Pégala tal cual en `DATABASE_URL`
-   (se aceptan `postgres://` y `postgresql://`; el driver psycopg se elige solo):
+Solo hacen falta **dos variables**:
 
-   | Modo | URL | Uso |
-   |---|---|---|
-   | **Session pooler** (recomendado) | `postgresql://postgres.<ref>:<pass>@aws-0-<region>.pooler.supabase.com:5432/postgres` | API, worker y migraciones. Funciona con IPv4 |
-   | Direct connection | `postgresql://postgres:<pass>@db.<ref>.supabase.co:5432/postgres` | Igual que session; solo IPv6 salvo add-on IPv4 |
-   | Transaction pooler | `…pooler.supabase.com:6543/postgres` | Serverless. Soportado; no lo uses para migraciones |
+```bash
+# Supabase → Project Settings → Database → Connection string → "Transaction pooler"
+# (puerto 6543). Usa el pooler: la conexión directa es solo IPv6.
+DATABASE_URL="postgresql://postgres.<project-ref>:[YOUR-PASSWORD]@aws-0-<region>.pooler.supabase.com:6543/postgres"
+DB_POOL_MAX=5
+```
 
-3. `alembic upgrade head` (en Docker Compose lo hace el servicio `migrate`).
+* Pega la URL tal cual y sustituye `[YOUR-PASSWORD]` por la contraseña de la base de datos
+  (sin corchetes). Si se queda el placeholder, la app arranca con un error claro.
+* La contraseña puede tener caracteres especiales (`@ # / ? :`) sin codificarlos. Si ya la
+  tienes URL-codificada (`%40`…) también funciona; si contiene un `%` literal seguido de dos
+  dígitos hexadecimales, escríbelo como `%25`.
+* `DB_POOL_MAX`: conexiones máximas por proceso (la API y el worker cuentan por separado).
+  Con el pooler de transacción, 5 es suficiente.
+* Migraciones: `alembic upgrade head` con la misma `DATABASE_URL` (en Docker Compose lo hace
+  el servicio `migrate`).
 
-Qué hace la aplicación automáticamente con Supabase:
+Lo que la app ajusta sola al ver el pooler de transacción de Supabase (puerto 6543):
 
-* **TLS obligatorio** (`sslmode=require`) para hosts `*.supabase.co`/`*.supabase.com`.
-  Para verificar también el certificado: descarga el CA (*Database Settings → SSL*) y usa
-  `DATABASE_SSL_MODE=verify-full` con `?sslrootcert=/ruta/ca.crt` en la URL.
-* **Pooler en modo transacción** (puerto 6543, o `DATABASE_POOLER_MODE=transaction`):
-  desactiva prepared statements y opciones de arranque, y usa locks ligados a la
-  transacción. Las garantías anti-replay no cambian.
-* **Tablas cerradas a la Data API de Supabase:** todas las tablas tienen **Row Level
-  Security** sin políticas y sin privilegios para `anon`/`authenticated`. Ni con la *anon
-  key* se pueden leer pagos, tokens o credenciales cifradas vía REST/GraphQL. El backend
-  conecta como `postgres` (propietario), por lo que no le afecta.
-* No uses la *service_role key* ni el cliente HTTP de Supabase: el backend habla
-  PostgreSQL directamente (transacciones y locks).
+* **TLS obligatorio** (`sslmode=require`).
+* **Sin prepared statements ni opciones de arranque**, que Supavisor no soporta en este modo.
+* **Locks entre réplicas ligados a la transacción** (`pg_try_advisory_xact_lock`), porque en
+  este modo cada transacción puede ir por una conexión distinta. Las garantías anti-replay
+  (`SELECT … FOR UPDATE` + `UNIQUE` dentro de una transacción) no cambian.
+* **Tablas cerradas a la Data API de Supabase:** todas tienen **Row Level Security** sin
+  políticas y sin privilegios para `anon`/`authenticated`. Ni con la *anon key* se pueden
+  leer pagos, tokens o credenciales cifradas vía REST/GraphQL. El backend conecta como
+  `postgres` (propietario), por lo que no le afecta.
+* No uses la *service_role key* ni el cliente HTTP de Supabase: el backend habla PostgreSQL
+  directamente (transacciones y locks).
 
-`DATABASE_POOL_SIZE` + `DATABASE_MAX_OVERFLOW` por réplica deben caber en el límite de
-conexiones de tu plan. Copias de seguridad y PITR quedan a cargo de Supabase.
+Opcionales avanzados (normalmente no hacen falta): `DATABASE_SSL_MODE` (p. ej. `verify-full`
+con `?sslrootcert=/ruta/ca.crt` en la URL) y `DATABASE_POOLER_MODE` (`session`/`transaction`,
+autodetectado por el puerto). También funcionan el *Session pooler* (puerto 5432) y cualquier
+PostgreSQL 14+.
 
 ## Arquitectura
 
@@ -299,7 +306,8 @@ Todas en [`.env.example`](.env.example). Las esenciales:
 
 | Variable | Descripción |
 |---|---|
-| `DATABASE_URL` | Cadena de conexión de Supabase, pegada tal cual |
+| `DATABASE_URL` | Connection string del *Transaction pooler* de Supabase, pegada tal cual |
+| `DB_POOL_MAX` | Conexiones máximas a la base de datos por proceso (5) |
 | `ADMIN_API_KEYS` | Tu clave maestra (≥ 32 caracteres). `python -m app.cli generate-admin-key` |
 | `CREDENTIALS_ENCRYPTION_KEY` | Clave AES-256 para las keys de Binance. `python -m app.cli generate-encryption-key` |
 | `PAYMENT_CODE_CASE_INSENSITIVE` | `true` recomendado (IDs de Binance en mayúsculas) |
