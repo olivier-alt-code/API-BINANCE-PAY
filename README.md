@@ -75,9 +75,12 @@ cp .env.example .env
    python -m app.cli generate-encryption-key   # -> CREDENTIALS_ENCRYPTION_KEY
    ```
 
-   Guárdalos en un gestor de contraseñas. Si pierdes la clave de cifrado, las API keys de
-   Binance guardadas no se podrán leer (los clientes tendrían que registrarlas de nuevo).
-3. **Migraciones:** `alembic upgrade head`.
+   Se generan **una sola vez** (no en cada arranque) y se guardan como secretos del entorno.
+   Guárdalos también en un gestor de contraseñas. Si pierdes o cambias la clave de cifrado,
+   las API keys de Binance guardadas no se podrán leer (los clientes tendrían que
+   registrarlas de nuevo).
+3. **Migraciones:** `alembic upgrade head` (con Docker Compose se aplican solas en cada
+   arranque, mediante el servicio `migrate`).
 4. **Arranca** la API y el worker:
 
    ```bash
@@ -93,6 +96,9 @@ En producción: `APP_ENV=production` (HSTS activado y `/docs` desactivado salvo
 `ENABLE_DOCS=true`) y TLS terminado en un proxy o en la plataforma de hosting.
 
 ## Dar acceso a alguien (clientes y tokens)
+
+> 📘 **Guía completa de los endpoints de administración** (todos los campos, respuestas,
+> errores y ejemplos para PowerShell y curl): [`docs/admin-api.md`](docs/admin-api.md).
 
 Puedes hacerlo por **HTTP** (con tu clave maestra) o con la **CLI** del servidor. Cada
 token se muestra **una única vez**: cópialo y envíaselo a esa persona por un canal privado.

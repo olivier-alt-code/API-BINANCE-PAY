@@ -403,3 +403,14 @@ async def test_openapi_documents_statuses(http: httpx.AsyncClient) -> None:
     op = spec["paths"]["/v1/payments/verify"]["post"]
     assert "ALREADY_CLAIMED" in op["description"] and "BINANCE_NOT_CONFIGURED" in op["description"]
     assert "/v1/admin/clients" in spec["paths"] and "/v1/me/binance-credentials" in spec["paths"]
+
+
+async def test_get_and_patch_client_return_full_summary(http: httpx.AsyncClient) -> None:
+    client_id = (await create_client(http, "ana"))["client"]["id"]
+    one = (await http.get(f"/v1/admin/clients/{client_id}", headers=ADMIN)).json()
+    assert one["activeTokens"] == 1 and one["binanceConfigured"] is False
+    patched = (
+        await http.patch(f"/v1/admin/clients/{client_id}", json={"enabled": False}, headers=ADMIN)
+    ).json()
+    assert patched["enabled"] is False and patched["activeTokens"] == 1
+    assert (await http.get("/v1/admin/clients/999", headers=ADMIN)).status_code == 404

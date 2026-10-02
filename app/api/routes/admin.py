@@ -27,7 +27,12 @@ from app.schemas.clients import (
     TokenOut,
     UpdateClientRequest,
 )
-from app.services.tenants import IssuedToken, TenantNameTakenError, TenantNotFoundError
+from app.services.tenants import (
+    IssuedToken,
+    TenantNameTakenError,
+    TenantNotFoundError,
+    TenantSummary,
+)
 
 router = APIRouter(prefix="/v1/admin", tags=["admin"])
 
@@ -35,6 +40,17 @@ _admin = [
     Depends(require_admin_key),
     Depends(rate_limit("admin", "rate_limit_admin_per_minute", require_admin_key)),
 ]
+
+
+def _summary(t: TenantSummary) -> ClientOut:
+    return ClientOut(
+        id=t.id,
+        name=t.name,
+        enabled=t.enabled,
+        created_at=t.created_at,
+        active_tokens=t.active_tokens,
+        binance_configured=t.binance_configured,
+    )
 
 
 def _issued(token: IssuedToken) -> IssuedTokenOut:
@@ -80,17 +96,7 @@ async def create_client(
 
 @router.get("/clients", response_model=list[ClientOut], summary="List clients", dependencies=_admin)
 async def list_clients(container: Container = Depends(get_container)) -> list[ClientOut]:
-    return [
-        ClientOut(
-            id=t.id,
-            name=t.name,
-            enabled=t.enabled,
-            created_at=t.created_at,
-            active_tokens=t.active_tokens,
-            binance_configured=t.binance_configured,
-        )
-        for t in await container.tenants.list_tenants()
-    ]
+    return [_summary(t) for t in await container.tenants.list_tenants()]
 
 
 @router.patch(
@@ -103,12 +109,23 @@ async def update_client(
     client_id: int, body: UpdateClientRequest, container: Container = Depends(get_container)
 ) -> ClientOut:
     try:
-        tenant = await container.tenants.set_enabled(client_id, body.enabled)
+        await container.tenants.set_enabled(client_id, body.enabled)
+        return _summary(await container.tenants.get_summary(client_id))
     except TenantNotFoundError:
         raise HTTPException(status_code=404, detail="Client not found") from None
-    return ClientOut(
-        id=tenant.id, name=tenant.name, enabled=tenant.enabled, created_at=tenant.created_at
-    )
+
+
+@router.get(
+    "/clients/{client_id}",
+    response_model=ClientOut,
+    summary="Get one client",
+    dependencies=_admin,
+)
+async def get_client(client_id: int, container: Container = Depends(get_container)) -> ClientOut:
+    try:
+        return _summary(await container.tenants.get_summary(client_id))
+    except TenantNotFoundError:
+        raise HTTPException(status_code=404, detail="Client not found") from None
 
 
 @router.post(

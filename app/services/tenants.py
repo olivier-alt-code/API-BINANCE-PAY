@@ -106,7 +106,7 @@ class TenantService:
             raise TenantNameTakenError("Client name already exists") from None
         return tenant, issued
 
-    async def list_tenants(self) -> list[TenantSummary]:
+    async def list_tenants(self, tenant_id: int | None = None) -> list[TenantSummary]:
         now = self._clock()
         async with self._sessionmaker() as session:
             active = (
@@ -125,11 +125,20 @@ class TenantService:
                 .where(BinanceCredential.tenant_id == Tenant.id)
                 .scalar_subquery()
             )
-            rows = await session.execute(select(Tenant, active, configured).order_by(Tenant.id))
+            stmt = select(Tenant, active, configured).order_by(Tenant.id)
+            if tenant_id is not None:
+                stmt = stmt.where(Tenant.id == tenant_id)
+            rows = await session.execute(stmt)
             return [
                 TenantSummary(t.id, t.name, t.enabled, t.created_at, int(a), bool(c))
                 for t, a, c in rows.all()
             ]
+
+    async def get_summary(self, tenant_id: int) -> TenantSummary:
+        found = await self.list_tenants(tenant_id)
+        if not found:
+            raise TenantNotFoundError("Client not found")
+        return found[0]
 
     async def set_enabled(self, tenant_id: int, enabled: bool) -> Tenant:
         async with self._sessionmaker() as session, session.begin():
