@@ -1,4 +1,4 @@
-"""Periodic mailbox synchronization worker.
+"""Periodic evidence synchronization worker (Binance Pay history API or Gmail).
 
 Run as its own process (``python -m app.workers.mail_sync_worker``) — any number of
 replicas is safe: the per-account PostgreSQL advisory lock makes concurrent runs skip
@@ -13,7 +13,7 @@ import logging
 import signal
 from datetime import UTC, datetime, timedelta
 
-from app.config import get_settings
+from app.config import EvidenceSource, get_settings
 from app.container import Container, build_container
 from app.core.logging import configure_logging
 from app.db.repositories.rate_limits import RateLimitRepository
@@ -23,21 +23,41 @@ from app.services.mail_sync import SyncMode
 logger = logging.getLogger(__name__)
 
 
+async def _sync_cycle(container: Container) -> None:
+    if container.settings.payment_evidence_source is EvidenceSource.BINANCE_API:
+        api = await container.api_sync_service.sync(SyncMode.PERIODIC)
+        if api.payments_imported or api.failed:
+            logger.info(
+                "binance_api_sync_cycle",
+                extra={"imported": api.payments_imported, "failed": api.failed},
+            )
+        return
+    summary = await container.sync_service.sync_all(SyncMode.PERIODIC)
+    if summary.payments_imported or summary.accounts_failed:
+        logger.info(
+            "mail_sync_cycle",
+            extra={
+                "imported": summary.payments_imported,
+                "failed": summary.accounts_failed,
+                "busy": summary.accounts_busy,
+            },
+        )
+
+
 async def run_sync_loop(container: Container, stop: asyncio.Event) -> None:
-    interval = container.settings.mail_sync_interval_seconds
-    logger.info("mail_sync_worker_started", extra={"interval_s": interval})
+    settings = container.settings
+    interval = (
+        settings.binance_api_sync_interval_seconds
+        if settings.payment_evidence_source is EvidenceSource.BINANCE_API
+        else settings.mail_sync_interval_seconds
+    )
+    logger.info(
+        "sync_worker_started",
+        extra={"interval_s": interval, "source": settings.payment_evidence_source.value},
+    )
     while not stop.is_set():
         try:
-            summary = await container.sync_service.sync_all(SyncMode.PERIODIC)
-            if summary.payments_imported or summary.accounts_failed:
-                logger.info(
-                    "mail_sync_cycle",
-                    extra={
-                        "imported": summary.payments_imported,
-                        "failed": summary.accounts_failed,
-                        "busy": summary.accounts_busy,
-                    },
-                )
+            await _sync_cycle(container)
             async with container.sessionmaker() as session, session.begin():
                 await RateLimitRepository(session).purge_older_than(
                     datetime.now(UTC) - timedelta(minutes=10)
@@ -47,10 +67,10 @@ async def run_sync_loop(container: Container, stop: asyncio.Event) -> None:
         except Exception:
             # Never die on one bad cycle (DB restart, network blip...). Details are logged
             # through the redacting logger.
-            logger.exception("mail_sync_cycle_error")
+            logger.exception("sync_cycle_error")
         with contextlib.suppress(TimeoutError):
             await asyncio.wait_for(stop.wait(), timeout=interval)
-    logger.info("mail_sync_worker_stopped")
+    logger.info("sync_worker_stopped")
 
 
 async def main() -> None:

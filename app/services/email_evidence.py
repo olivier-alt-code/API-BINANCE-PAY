@@ -48,7 +48,9 @@ class BinanceEmailPaymentProvider:
 
     async def _lookup(self, payment_code: str) -> PaymentEvidence | None:
         async with self._sessionmaker() as session:
-            payment = await PaymentRepository(session).find_best_by_code(payment_code)
+            payment = await PaymentRepository(session).find_best_by_code(
+                payment_code, source=PaymentSource.BINANCE_EMAIL
+            )
             return payment_to_evidence(payment) if payment is not None else None
 
     async def find_payment(self, payment_code: str) -> PaymentEvidence | None:

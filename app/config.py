@@ -28,6 +28,13 @@ class Environment(StrEnum):
     PRODUCTION = "production"
 
 
+class EvidenceSource(StrEnum):
+    # Binance account API (GET /sapi/v1/pay/transactions): gives the transaction id.
+    BINANCE_API = "binance_api"
+    # Binance notification emails in Gmail (no transaction id in the real emails).
+    EMAIL = "email"
+
+
 class GmailAuthMethod(StrEnum):
     APP_PASSWORD = "app_password"  # noqa: S105 - enum label, not a secret
     OAUTH2 = "oauth2"
@@ -123,6 +130,24 @@ class Settings(BaseSettings):
     # Run the periodic sync loop inside the API process (otherwise run the worker process).
     run_sync_worker_in_api: bool = False
 
+    # --- Payment evidence source -------------------------------------------------------
+    payment_evidence_source: EvidenceSource = EvidenceSource.BINANCE_API
+
+    # --- Binance account API (Pay trade history) ---------------------------------------
+    # Create the key in Binance -> API Management with ONLY "Enable Reading".
+    binance_api_key: SecretStr | None = None
+    binance_api_secret: SecretStr | None = None
+    binance_api_base_url: str = "https://api.binance.com"
+    binance_api_timeout_seconds: float = Field(default=10, gt=0, le=60)
+    binance_api_recv_window_ms: int = Field(default=10_000, ge=1_000, le=60_000)
+    binance_api_max_retries: int = Field(default=2, ge=0, le=5)
+    # The endpoint weighs 3000 (UID): keep syncs spaced out across ALL replicas.
+    binance_api_sync_interval_seconds: int = Field(default=15, ge=5)
+    binance_api_min_interval_seconds: float = Field(default=5, ge=1)
+    binance_api_initial_lookback_hours: int = Field(default=48, ge=1, le=24 * 89)
+    binance_api_overlap_seconds: int = Field(default=300, ge=0, le=3600)
+    binance_pay_order_types: CsvList = Field(default_factory=lambda: ["C2C"])
+
     # --- Binance email identification & trust ----------------------------------------
     binance_allowed_senders: CsvList = Field(default_factory=list)
     binance_allowed_domains: CsvList = Field(default_factory=list)
@@ -151,6 +176,7 @@ class Settings(BaseSettings):
         "binance_allowed_senders",
         "binance_allowed_domains",
         "binance_enabled_templates",
+        "binance_pay_order_types",
         "email_trusted_authserv_ids",
         mode="before",
     )
@@ -238,6 +264,10 @@ class Settings(BaseSettings):
         return not self.is_production
 
     @property
+    def binance_api_configured(self) -> bool:
+        return self.binance_api_key is not None and self.binance_api_secret is not None
+
+    @property
     def binance_senders_configured(self) -> bool:
         return bool(self.binance_allowed_senders or self.binance_allowed_domains)
 
@@ -266,6 +296,8 @@ class Settings(BaseSettings):
             self.gmail_account_password,
             self.gmail_oauth_refresh_token,
             self.google_client_secret,
+            self.binance_api_key,
+            self.binance_api_secret,
             *self.api_keys,
             *self.admin_api_keys,
             *self.credentials_encryption_previous_keys,

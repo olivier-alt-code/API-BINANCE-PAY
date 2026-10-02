@@ -13,15 +13,17 @@ from app.services.payment_verifier import VerificationRequest
 router = APIRouter(prefix="/v1/payments", tags=["payments"])
 
 _STATUS_DOC = """
-Verifies a Binance payment using authenticated Binance notification emails and, on
-success, **atomically claims** it so it can never pay a second order.
+Verifies a Binance payment and, on success, **atomically claims** it so it can never pay
+a second order. Evidence comes from the Binance Pay trade history API
+(`PAYMENT_EVIDENCE_SOURCE=binance_api`, default; `paymentCode` is the Binance Pay
+`transactionId`, e.g. `P_A99TESTPAYX71116`) or from authenticated notification emails.
 
 Every processed verification returns **HTTP 200** with `verified` and `status`:
 
 | status | meaning | retryable |
 |---|---|---|
 | `VERIFIED` | Trusted, exact code/amount/asset, recent, claimed for this order (`idempotent: true` when the same `orderReference` asks again). | – |
-| `NOT_FOUND` | No payment with exactly this code (after on-demand mailbox sync). | yes |
+| `NOT_FOUND` | No incoming payment with exactly this code (after an on-demand sync). | yes |
 | `PENDING_SYNC` | Another replica is syncing the mailbox; retry in a few seconds. | yes |
 | `AMOUNT_MISMATCH` | Received amount differs from `expectedAmount` (exact Decimal comparison). | no |
 | `ASSET_MISMATCH` | Received asset differs (e.g. USDC vs USDT). | no |
@@ -29,7 +31,8 @@ Every processed verification returns **HTTP 200** with `verified` and `status`:
 | `EXPIRED_PAYMENT` | Older than `maxAgeMinutes` (or timestamp in the future). | no |
 | `ALREADY_CLAIMED` | Payment already used by another order (anti-replay). | no |
 | `INVALID_PAYMENT_CODE` | Code format is invalid. | no |
-| `MAIL_PROVIDER_UNAVAILABLE` | Gmail/IMAP unreachable, timed out or auth failed. | yes |
+| `MAIL_PROVIDER_UNAVAILABLE` | Gmail/IMAP unreachable, timed out or auth failed (email source). | yes |
+| `BINANCE_API_UNAVAILABLE` | Binance API unreachable, rate limited or key rejected (API source). | yes |
 | `PAYMENT_NOT_COMPLETED` | Notification found but status is pending/failed/refunded. | yes |
 | `AMBIGUOUS_PAYMENT` | Contradicting trusted evidence for the same code. Manual review. | no |
 

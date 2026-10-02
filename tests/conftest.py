@@ -45,6 +45,8 @@ def make_settings(**overrides: Any) -> Settings:
         "mail_on_demand_min_interval_seconds": 0,
         "mail_sync_lock_wait_seconds": 2,
         "log_json": False,
+        # Existing suites exercise the email source; Binance API suites override this.
+        "payment_evidence_source": "email",
         "rate_limit_verify_per_minute": 1000,
         "rate_limit_admin_per_minute": 1000,
     }
@@ -188,7 +190,7 @@ async def sessionmaker(engine: AsyncEngine) -> AsyncIterator[async_sessionmaker[
         await conn.execute(
             text(
                 "TRUNCATE payment_claims, payments, email_messages, mail_accounts, "
-                "rate_limit_counters RESTART IDENTITY CASCADE"
+                "rate_limit_counters, evidence_sync_state RESTART IDENTITY CASCADE"
             )
         )
     yield async_sessionmaker(engine, expire_on_commit=False, autoflush=False)
@@ -203,12 +205,69 @@ def build(
     """Build a fully wired container against the test DB and the fake mailbox."""
     from app.container import build_container
 
-    def _build(**overrides: Any) -> Any:
+    def _build(*, pay_history_client: Any = None, **overrides: Any) -> Any:
         return build_container(
             make_settings(**overrides),
             engine,
             sessionmaker,
             provider_factory=FakeProviderFactory(mailbox),
+            pay_history_client=pay_history_client,
         )
 
     return _build
+
+
+# --- Fake Binance Pay history API -------------------------------------------------------
+
+
+class FakePayHistoryClient:
+    """In-memory stand-in for BinancePayHistoryClient (same interface as the real one)."""
+
+    def __init__(self) -> None:
+        from app.integrations.binance.account_api import PayTransaction
+
+        self._cls = PayTransaction
+        self.transactions: list[Any] = []
+        self.calls: list[tuple[datetime, datetime]] = []
+        self.fail: Exception | None = None
+        self.delay = 0.0
+
+    def add(
+        self,
+        transaction_id: str,
+        amount: str,
+        currency: str = "USDT",
+        *,
+        when: datetime | None = None,
+        order_type: str = "C2C",
+        payer: str | None = "User-0000aaaa",
+    ) -> None:
+        from datetime import UTC
+        from decimal import Decimal
+
+        self.transactions.append(
+            self._cls(
+                order_type=order_type,
+                transaction_id=transaction_id,
+                transaction_time=when or datetime.now(UTC).replace(microsecond=0),
+                amount=Decimal(amount),
+                currency=currency,
+                payer_name=payer,
+                payer_binance_id=None,
+            )
+        )
+
+    async def fetch_transactions(
+        self, start: datetime, end: datetime, *, max_pages: int = 20
+    ) -> list[Any]:
+        self.calls.append((start, end))
+        if self.delay:
+            await asyncio.sleep(self.delay)
+        if self.fail is not None:
+            raise self.fail
+        return [t for t in self.transactions if start <= t.transaction_time <= end]
+
+
+@pytest.fixture
+def pay_api() -> FakePayHistoryClient:
+    return FakePayHistoryClient()

@@ -32,19 +32,25 @@ class NewPayment:
     received_at: datetime
     trusted: bool
     template: str | None
+    payer_name: str | None = None
+    payer_binance_id: str | None = None
 
 
 class PaymentRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._s = session
 
-    async def find_best_by_code(self, payment_code: str) -> Payment | None:
+    async def find_best_by_code(
+        self, payment_code: str, *, source: str | None = None
+    ) -> Payment | None:
         """Exact (``=``) match only. Trusted evidence wins; otherwise the newest untrusted."""
+        stmt = select(Payment).where(Payment.payment_code == payment_code)
+        if source is not None:
+            stmt = stmt.where(Payment.source == source)
         return await self._s.scalar(
-            select(Payment)
-            .where(Payment.payment_code == payment_code)
-            .order_by(Payment.trusted.desc(), Payment.received_at.desc(), Payment.id.desc())
-            .limit(1)
+            stmt.order_by(
+                Payment.trusted.desc(), Payment.received_at.desc(), Payment.id.desc()
+            ).limit(1)
         )
 
     async def store(self, new: NewPayment) -> StoreOutcome:
@@ -67,6 +73,8 @@ class PaymentRepository:
                 trusted=new.trusted,
                 ambiguous=False,
                 template=new.template,
+                payer_name=new.payer_name,
+                payer_binance_id=new.payer_binance_id,
             )
             .on_conflict_do_nothing()
             .returning(Payment.id)

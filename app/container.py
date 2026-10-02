@@ -12,9 +12,10 @@ from datetime import timedelta
 
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from app.config import Settings
+from app.config import EvidenceSource, Settings
 from app.core.encryption import CredentialCipher, build_cipher
 from app.core.exceptions import ConfigurationError
+from app.integrations.binance.account_api import BinancePayHistoryClient
 from app.integrations.binance.email_parser import BinanceEmailParser
 from app.integrations.binance.email_validator import EmailTrustValidator, TrustPolicy
 from app.integrations.binance.evidence import PaymentEvidenceProvider
@@ -22,6 +23,11 @@ from app.integrations.binance.templates import select_templates
 from app.integrations.mail.base import MailProviderFactory
 from app.integrations.mail.factory import GmailProviderFactory
 from app.integrations.mail.gmail_oauth import GoogleOAuthClient, OAuthStateCodec
+from app.services.binance_api_sync import (
+    BinanceApiSyncService,
+    BinancePayHistoryProvider,
+    PayHistoryClient,
+)
 from app.services.email_evidence import BinanceEmailPaymentProvider
 from app.services.mail_sync import MailSyncService
 from app.services.payment_claim import PaymentClaimService
@@ -42,6 +48,7 @@ class Container:
     parser: BinanceEmailParser
     validator: EmailTrustValidator
     sync_service: MailSyncService
+    api_sync_service: BinanceApiSyncService
     evidence_provider: PaymentEvidenceProvider
     claim_service: PaymentClaimService
     verifier: PaymentVerifier
@@ -54,6 +61,7 @@ def build_container(
     sessionmaker: async_sessionmaker[AsyncSession],
     *,
     provider_factory: MailProviderFactory | None = None,
+    pay_history_client: PayHistoryClient | None = None,
 ) -> Container:
     cipher: CredentialCipher | None = None
     if settings.credentials_encryption_key is not None:
@@ -95,9 +103,28 @@ def build_container(
         parser=parser,
         cipher=cipher,
     )
-    evidence_provider = BinanceEmailPaymentProvider(
-        settings=settings, sessionmaker=sessionmaker, sync_service=sync_service
+    if pay_history_client is None and settings.binance_api_configured:
+        assert settings.binance_api_key is not None and settings.binance_api_secret is not None
+        pay_history_client = BinancePayHistoryClient(
+            api_key=settings.binance_api_key,
+            api_secret=settings.binance_api_secret,
+            base_url=settings.binance_api_base_url,
+            timeout_seconds=settings.binance_api_timeout_seconds,
+            recv_window_ms=settings.binance_api_recv_window_ms,
+            max_retries=settings.binance_api_max_retries,
+        )
+    api_sync_service = BinanceApiSyncService(
+        settings=settings, engine=engine, sessionmaker=sessionmaker, client=pay_history_client
     )
+    evidence_provider: PaymentEvidenceProvider
+    if settings.payment_evidence_source is EvidenceSource.BINANCE_API:
+        evidence_provider = BinancePayHistoryProvider(
+            settings=settings, sessionmaker=sessionmaker, sync_service=api_sync_service
+        )
+    else:
+        evidence_provider = BinanceEmailPaymentProvider(
+            settings=settings, sessionmaker=sessionmaker, sync_service=sync_service
+        )
     claim_service = PaymentClaimService(sessionmaker)
     verifier = PaymentVerifier(
         evidence_provider=evidence_provider,
@@ -116,6 +143,7 @@ def build_container(
         parser=parser,
         validator=validator,
         sync_service=sync_service,
+        api_sync_service=api_sync_service,
         evidence_provider=evidence_provider,
         claim_service=claim_service,
         verifier=verifier,

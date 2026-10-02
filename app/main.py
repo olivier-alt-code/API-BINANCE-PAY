@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from app.api.routes import gmail, health, payments
+from app.api.routes import binance, gmail, health, payments
 from app.config import Settings, get_settings
 from app.container import Container, build_container
 from app.core.logging import configure_logging
@@ -113,6 +113,7 @@ def create_app(settings: Settings | None = None, container: Container | None = N
     app.include_router(health.router)
     app.include_router(payments.router)
     app.include_router(gmail.router)
+    app.include_router(binance.router)
     return app
 
 

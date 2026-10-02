@@ -15,6 +15,7 @@ from decimal import Decimal
 from enum import StrEnum
 
 from app.core.exceptions import EvidenceProviderUnavailableError, EvidenceSyncPendingError
+from app.db.models import PaymentSource
 from app.integrations.binance.evidence import PaymentEvidenceProvider
 from app.integrations.binance.templates import PaymentStatus
 from app.services.payment_claim import ClaimStatus, PaymentClaimService
@@ -35,6 +36,7 @@ class VerificationStatus(StrEnum):
     ALREADY_CLAIMED = "ALREADY_CLAIMED"
     INVALID_PAYMENT_CODE = "INVALID_PAYMENT_CODE"
     MAIL_PROVIDER_UNAVAILABLE = "MAIL_PROVIDER_UNAVAILABLE"
+    BINANCE_API_UNAVAILABLE = "BINANCE_API_UNAVAILABLE"
     # Extensions (documented in README): evidence exists but cannot be accepted.
     PAYMENT_NOT_COMPLETED = "PAYMENT_NOT_COMPLETED"
     AMBIGUOUS_PAYMENT = "AMBIGUOUS_PAYMENT"
@@ -45,6 +47,7 @@ RETRYABLE = frozenset(
         VerificationStatus.NOT_FOUND,
         VerificationStatus.PENDING_SYNC,
         VerificationStatus.MAIL_PROVIDER_UNAVAILABLE,
+        VerificationStatus.BINANCE_API_UNAVAILABLE,
         VerificationStatus.PAYMENT_NOT_COMPLETED,
     }
 )
@@ -142,8 +145,13 @@ class PaymentVerifier:
         except EvidenceSyncPendingError:
             return result(VerificationStatus.PENDING_SYNC, detail="Mailbox sync in progress")
         except EvidenceProviderUnavailableError:
+            if self._provider.source is PaymentSource.BINANCE_EMAIL:
+                return result(
+                    VerificationStatus.MAIL_PROVIDER_UNAVAILABLE,
+                    detail="Mail provider unavailable",
+                )
             return result(
-                VerificationStatus.MAIL_PROVIDER_UNAVAILABLE, detail="Mail provider unavailable"
+                VerificationStatus.BINANCE_API_UNAVAILABLE, detail="Binance API unavailable"
             )
         if evidence is None:
             return result(VerificationStatus.NOT_FOUND)

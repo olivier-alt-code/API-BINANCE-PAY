@@ -39,7 +39,8 @@ class MailAuthType(StrEnum):
 
 class PaymentSource(StrEnum):
     BINANCE_EMAIL = "BINANCE_EMAIL"
-    BINANCE_PAY_API = "BINANCE_PAY_API"
+    BINANCE_PAY_API = "BINANCE_PAY_API"  # Binance Pay Merchant API (prepared, not enabled)
+    BINANCE_PAY_HISTORY = "BINANCE_PAY_HISTORY"  # account API GET /sapi/v1/pay/transactions
 
 
 class MessageParseStatus(StrEnum):
@@ -124,6 +125,9 @@ class Payment(TimestampMixin, Base):
     # Set when two trusted sources disagree about the same payment_code.
     ambiguous: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     template: Mapped[str | None] = mapped_column(String(64))
+    # Counterparty as reported by Binance (audit only; never used for matching).
+    payer_name: Mapped[str | None] = mapped_column(String(128))
+    payer_binance_id: Mapped[str | None] = mapped_column(String(64))
 
     claim: Mapped[PaymentClaim | None] = relationship(back_populates="payment", lazy="raise")
 
@@ -165,6 +169,17 @@ class PaymentClaim(Base):
     __table_args__ = (Index("ix_payment_claims_order_reference", "order_reference"),)
 
 
+class EvidenceSyncState(Base):
+    """Incremental cursor for API-based evidence sources (shared by all replicas)."""
+
+    __tablename__ = "evidence_sync_state"
+
+    source: Mapped[str] = mapped_column(String(32), primary_key=True)
+    cursor_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(String(255))
+
+
 class RateLimitCounter(Base):
     """Fixed-window counters shared by all replicas (no Redis required)."""
 
@@ -177,6 +192,7 @@ class RateLimitCounter(Base):
 
 __all__ = [
     "EmailMessage",
+    "EvidenceSyncState",
     "MailAccount",
     "MailAuthType",
     "MessageParseStatus",

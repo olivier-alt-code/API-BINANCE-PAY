@@ -1,8 +1,17 @@
 # Binance Payment Verifier
 
-API backend (FastAPI + **Supabase**/PostgreSQL) que **verifica pagos recibidos en Binance** leyendo las
-notificaciones de pago que Binance envía a una cuenta **Gmail**, y que **reclama cada pago
-de forma atómica** para que nunca pueda usarse para pagar dos órdenes.
+API backend (FastAPI + **Supabase**/PostgreSQL) que **verifica pagos recibidos en Binance**
+y **reclama cada pago de forma atómica** para que nunca pueda usarse para pagar dos órdenes.
+
+Fuente de evidencias (`PAYMENT_EVIDENCE_SOURCE`):
+
+* **`binance_api` (por defecto, recomendada):** la API oficial de historial de Binance Pay
+  de tu cuenta (`GET /sapi/v1/pay/transactions`, API key **solo lectura**). Devuelve el
+  **`transactionId`** de cada transferencia (p. ej. `P_A99TESTPAYX71116`), que es el
+  `paymentCode` que se verifica. Ver [API de Binance Pay](#fuente-recomendada-api-de-historial-de-binance-pay).
+* **`email`:** notificaciones de Binance en Gmail. Los emails reales de "Payment Receive
+  Successful" **no incluyen el ID de la transacción** (solo monto, hora y nickname del
+  pagador), así que por sí solos no permiten saber qué orden se pagó.
 
 > ## ⚠️ Nunca proporciones la contraseña normal de tu cuenta de Google
 >
@@ -11,10 +20,12 @@ de forma atómica** para que nunca pueda usarse para pagar dos órdenes.
 > `GMAIL_APP_PASSWORD` que no tenga el formato de una App Password. La autenticación con
 > la contraseña normal está implementada pero **deshabilitada** y no debe activarse.
 
-> ## ⚠️ Formato del email de Binance: todavía SIMULADO
+> ## ⚠️ Fuente `email`: plantillas SIMULADAS
 >
-> Al escribir este proyecto no se disponía de una notificación real de Binance. Las
-> plantillas del parser y las fixtures `.eml` son **simuladas** y están marcadas como tal.
+> Ya se analizó un email real (remitente `donotreply@directmail.binance.com`, asunto
+> `[Binance] Payment Receive Successful`), y **no contiene el ID de la transacción**. Por
+> eso la fuente por defecto es la API. Las plantillas del parser y las fixtures `.eml`
+> siguen siendo **simuladas** y están marcadas como tal.
 > En producción (`APP_ENV=production`) las plantillas simuladas están **desactivadas**:
 > `/ready` devolverá `not_ready` hasta que añadas la plantilla real
 > (ver [Introducir un email Binance real](#cómo-introducir-un-email-binance-real-como-fixture)).
@@ -25,24 +36,72 @@ de forma atómica** para que nunca pueda usarse para pagar dos órdenes.
 
 ## Índice
 
-1. [Arquitectura](#arquitectura)
-2. [Instalación](#instalación)
-3. [Supabase (almacenamiento)](#supabase-almacenamiento)
-4. [Variables de entorno](#variables-de-entorno)
-5. [Gmail: App Password](#gmail-método-a--app-password)
-6. [Gmail: OAuth2](#gmail-método-b--oauth2--xoauth2)
-7. [Iniciar la API y el worker](#iniciar-la-api-y-el-worker)
-8. [Migraciones](#migraciones)
-9. [Tests, lint y type checking](#tests-lint-y-type-checking)
-10. [Introducir un email Binance real como fixture](#cómo-introducir-un-email-binance-real-como-fixture)
-11. [Configurar remitentes permitidos](#configurar-remitentes-permitidos)
-12. [Probar `/v1/payments/verify`](#probar-v1paymentsverify)
-13. [Anti-replay, idempotencia y concurrencia](#anti-replay-idempotencia-y-concurrencia)
-14. [Seguridad](#seguridad)
-15. [Binance Pay API (futuro)](#binance-pay-api-futuro)
-16. [Riesgos y limitaciones](#riesgos-y-limitaciones-de-verificar-pagos-mediante-email)
+1. [API de historial de Binance Pay (fuente recomendada)](#fuente-recomendada-api-de-historial-de-binance-pay)
+2. [Arquitectura](#arquitectura)
+3. [Instalación](#instalación)
+4. [Supabase (almacenamiento)](#supabase-almacenamiento)
+5. [Variables de entorno](#variables-de-entorno)
+6. [Gmail: App Password](#gmail-método-a--app-password)
+7. [Gmail: OAuth2](#gmail-método-b--oauth2--xoauth2)
+8. [Iniciar la API y el worker](#iniciar-la-api-y-el-worker)
+9. [Migraciones](#migraciones)
+10. [Tests, lint y type checking](#tests-lint-y-type-checking)
+11. [Introducir un email Binance real como fixture](#cómo-introducir-un-email-binance-real-como-fixture)
+12. [Configurar remitentes permitidos](#configurar-remitentes-permitidos)
+13. [Probar `/v1/payments/verify`](#probar-v1paymentsverify)
+14. [Anti-replay, idempotencia y concurrencia](#anti-replay-idempotencia-y-concurrencia)
+15. [Seguridad](#seguridad)
+16. [Binance Pay Merchant API (futuro)](#binance-pay-merchant-api-futuro)
+17. [Riesgos y limitaciones](#riesgos-y-limitaciones-de-verificar-pagos-mediante-email)
 
 ---
+
+## Fuente recomendada: API de historial de Binance Pay
+
+Endpoint oficial de tu cuenta normal de Binance (no requiere cuenta de comerciante):
+`GET /sapi/v1/pay/transactions` ("Get Pay Trade History"). Por cada transferencia devuelve
+`transactionId`, `orderType` (`C2C` para transferencias entre usuarios), `amount`
+(positivo = ingreso), `currency`, `transactionTime` y `payerInfo`.
+
+Verificado con una cuenta real: una transferencia notificada por email (98.814 USDT a una
+hora concreta, de un nickname `User-xxxxxxxx`) aparece en la API con la misma hora, monto
+y pagador, y con su ID (formato `P_` + 16 caracteres en mayúsculas). Ejemplo (anonimizado):
+`C2C P_A99TESTPAYX71116 98.814 USDT 2026-09-19 01:16:42 User-0000aaaa`.
+
+**Configuración**
+
+1. Binance → *Gestión de API* → crea una API key con **solo "Enable Reading"** (nada de
+   trading ni retiros) y, si puedes, restringida a la IP de tu servidor.
+2. `.env`: `PAYMENT_EVIDENCE_SOURCE=binance_api`, `BINANCE_API_KEY`, `BINANCE_API_SECRET`
+   y `PAYMENT_CODE_CASE_INSENSITIVE=true` (los IDs observados son siempre mayúsculas).
+3. Prueba: `POST /v1/admin/binance/test` (debe dar `connected: true`) y
+   `POST /v1/admin/binance/sync` (importa las transferencias recientes).
+
+**Cómo funciona**
+
+* El worker consulta la API cada `BINANCE_API_SYNC_INTERVAL_SECONDS` (15 s) y guarda las
+  transferencias **entrantes** (`amount > 0`, `orderType` en `BINANCE_PAY_ORDER_TYPES`,
+  por defecto `C2C`) en `payments` (`source=BINANCE_PAY_HISTORY`,
+  `payment_code=transactionId`). Las salientes y otros tipos se ignoran.
+* `POST /v1/payments/verify` busca el `transactionId` exacto en PostgreSQL; si no está,
+  consulta Binance en ese momento y vuelve a buscar. Después aplica las mismas reglas:
+  monto `Decimal` exacto, asset, antigüedad, claim atómico e idempotencia.
+* Sincronización incremental con cursor y ventana de solape
+  (`BINANCE_API_OVERLAP_SECONDS`) en la tabla `evidence_sync_state`.
+* **Límite de peso:** cada llamada pesa 3000 (UID). Un advisory lock y
+  `BINANCE_API_MIN_INTERVAL_SECONDS` (guardado en PostgreSQL) garantizan que, aunque
+  lleguen muchas verificaciones o haya varias réplicas, no se llama a Binance más de una
+  vez por intervalo.
+* Firma HMAC-SHA256, montos como `Decimal`, reintentos limitados ante 5xx/429/red,
+  corrección automática del desfase de reloj (`-1021`), y ni la key, ni el secret, ni la
+  firma aparecen en logs, excepciones o respuestas.
+
+**Flujo para tu cliente:** paga por Binance Pay a tu cuenta y te envía el **ID de la
+transacción** de su comprobante. Tu sistema llama a `/v1/payments/verify` con ese ID, el
+monto esperado y tu `orderReference`.
+
+> Confirma con un pago real que el ID que el **pagador** ve en el detalle de su
+> transferencia en la app de Binance es el mismo `transactionId` que devuelve la API.
 
 ## Arquitectura
 
@@ -391,8 +450,8 @@ curl -s https://tu-api.example.com/v1/payments/verify \
   -H "Authorization: Bearer $API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-        "paymentCode": "PAY-82919381",
-        "expectedAmount": "25",
+        "paymentCode": "P_A99TESTPAYX71116",
+        "expectedAmount": "98.814",
         "asset": "USDT",
         "orderReference": "SUBSCRIPTION-9321",
         "maxAgeMinutes": 60
@@ -403,11 +462,11 @@ curl -s https://tu-api.example.com/v1/payments/verify \
 {
   "verified": true,
   "status": "VERIFIED",
-  "paymentCode": "PAY-82919381",
-  "expectedAmount": "25",
-  "receivedAmount": "25",
+  "paymentCode": "P_A99TESTPAYX71116",
+  "expectedAmount": "98.814",
+  "receivedAmount": "98.814",
   "asset": "USDT",
-  "receivedAt": "2026-10-01T20:15:31Z",
+  "receivedAt": "2026-09-19T01:16:42Z",
   "orderReference": "SUBSCRIPTION-9321",
   "retryable": false
 }
@@ -435,7 +494,8 @@ Todas las verificaciones procesadas responden **HTTP 200** con `verified`, `stat
 | `EXPIRED_PAYMENT` | Más antiguo que `maxAgeMinutes` (o fecha en el futuro) | no |
 | `ALREADY_CLAIMED` | El pago ya fue usado por otra orden | no |
 | `INVALID_PAYMENT_CODE` | Formato de código inválido | no |
-| `MAIL_PROVIDER_UNAVAILABLE` | Gmail/IMAP caído, timeout o error de autenticación | sí |
+| `MAIL_PROVIDER_UNAVAILABLE` | Gmail/IMAP caído, timeout o error de autenticación (fuente `email`) | sí |
+| `BINANCE_API_UNAVAILABLE` | API de Binance caída, límite de peso o API key rechazada (fuente `binance_api`) | sí |
 | `PAYMENT_NOT_COMPLETED` | *(extensión)* Notificación con estado pendiente/fallido/reembolsado | sí |
 | `AMBIGUOUS_PAYMENT` | *(extensión)* Evidencias de confianza contradictorias para el mismo código → revisión manual | no |
 
@@ -500,7 +560,7 @@ Ninguno lista mensajes ni devuelve contenido de emails o credenciales.
 * **Datos mínimos:** no se guarda el cuerpo del email (solo hash SHA-256 y metadatos).
   `STORE_RAW_EMAILS=true` guarda el raw **cifrado**, y solo de remitentes Binance.
 
-## Binance Pay API (futuro)
+## Binance Pay Merchant API (futuro)
 
 `PaymentVerifier` depende de `PaymentEvidenceProvider`, no del email. En
 `app/integrations/binance/pay_api.py` están preparados `BinancePayClient` (firma
