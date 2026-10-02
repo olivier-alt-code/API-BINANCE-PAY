@@ -1,0 +1,26 @@
+Authentication-Results: mx.google.com; dkim=pass
+ header.i=@lookalike-binance.test header.s=s1 header.b=AbCdEf; spf=pass
+ (google.com: domain of bounce@lookalike-binance.test designates 192.0.2.1 as
+ permitted sender) smtp.mailfrom=bounce@lookalike-binance.test; dmarc=pass
+ (p=REJECT sp=REJECT dis=NONE) header.from=lookalike-binance.test
+X-Fixture-Notice: SIMULATED - not a real Binance email
+From: Binance <notifications@binance.example>
+ <binance-support@lookalike-binance.test>
+To: merchant@gmail.com
+Date: Thu, 01 Oct 2026 20:15:31 +0000
+Message-ID: <123456789ABC.1790885731@binance.example>
+Subject: [Binance] Payment Received - 2026-10-01 20:15:31(UTC)
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+MIME-Version: 1.0
+
+Dear user,
+
+You have received a payment via Binance Pay.
+
+Payment ID: 123456789ABC
+Amount: 25.50 USDT
+Status: Completed
+Time: 2026-10-01 20:15:31 (UTC)
+
+This is an automated message, please do not reply.

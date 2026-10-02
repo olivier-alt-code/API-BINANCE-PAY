@@ -1,0 +1,65 @@
+# Development stack. Do NOT put real secrets here: use a local .env file (git-ignored).
+name: binance-pay-verifier
+
+x-app: &app
+  build: .
+  env_file:
+    - path: .env
+      required: false
+  environment:
+    DATABASE_URL: postgresql+psycopg://binance:binance@postgres:5432/binance_pay
+    APP_ENV: ${APP_ENV:-development}
+  depends_on:
+    postgres:
+      condition: service_healthy
+  read_only: true
+  tmpfs:
+    - /tmp
+  security_opt:
+    - no-new-privileges:true
+  restart: unless-stopped
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: binance
+      POSTGRES_PASSWORD: binance  # development only
+      POSTGRES_DB: binance_pay
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U binance -d binance_pay"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  migrate:
+    <<: *app
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+
+  api:
+    <<: *app
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  # Periodic Gmail sync. Safe to scale (`--scale worker=2`): PostgreSQL advisory locks.
+  worker:
+    <<: *app
+    command: ["python", "-m", "app.workers.mail_sync_worker"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  pgdata:

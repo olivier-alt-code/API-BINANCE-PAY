@@ -1,0 +1,30 @@
+Authentication-Results: mx.google.com; dkim=fail header.i=@binance.example
+ header.s=s1 header.b=AbCdEf; spf=fail (google.com: domain of
+ bounce@binance.example designates 192.0.2.1 as permitted sender)
+ smtp.mailfrom=bounce@binance.example; dmarc=fail (p=REJECT sp=REJECT
+ dis=NONE) header.from=binance.example
+Authentication-Results: mx.google.com; dkim=pass header.i=@binance.example
+ header.s=s1 header.b=AbCdEf; spf=pass (google.com: domain of
+ bounce@binance.example designates 192.0.2.1 as permitted sender)
+ smtp.mailfrom=bounce@binance.example; dmarc=pass (p=REJECT sp=REJECT
+ dis=NONE) header.from=binance.example
+X-Fixture-Notice: SIMULATED - not a real Binance email
+From: Binance <notifications@binance.example>
+To: merchant@gmail.com
+Date: Thu, 01 Oct 2026 20:15:31 +0000
+Message-ID: <123456789ABC.1790885731@binance.example>
+Subject: [Binance] Payment Received - 2026-10-01 20:15:31(UTC)
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+MIME-Version: 1.0
+
+Dear user,
+
+You have received a payment via Binance Pay.
+
+Payment ID: 123456789ABC
+Amount: 25.50 USDT
+Status: Completed
+Time: 2026-10-01 20:15:31 (UTC)
+
+This is an automated message, please do not reply.
