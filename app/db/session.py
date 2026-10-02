@@ -14,8 +14,9 @@ from app.config import Settings, get_settings
 
 
 def create_engine(settings: Settings) -> AsyncEngine:
+    db = settings.database  # local PostgreSQL or Supabase (direct / session / transaction pooler)
     return create_async_engine(
-        settings.database_url.get_secret_value(),
+        db.url,
         pool_size=settings.database_pool_size,
         max_overflow=settings.database_max_overflow,
         pool_timeout=settings.database_pool_timeout_seconds,
@@ -23,11 +24,7 @@ def create_engine(settings: Settings) -> AsyncEngine:
         # Never echo SQL: parameters could contain encrypted credentials.
         echo=False,
         hide_parameters=True,
-        connect_args={
-            "options": f"-c statement_timeout={settings.database_statement_timeout_ms} "
-            "-c timezone=UTC",
-            "connect_timeout": 10,
-        },
+        connect_args=db.connect_args,
     )
 
 

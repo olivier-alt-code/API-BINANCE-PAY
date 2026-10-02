@@ -1,6 +1,6 @@
 # Binance Payment Verifier
 
-API backend (FastAPI + PostgreSQL) que **verifica pagos recibidos en Binance** leyendo las
+API backend (FastAPI + **Supabase**/PostgreSQL) que **verifica pagos recibidos en Binance** leyendo las
 notificaciones de pago que Binance envía a una cuenta **Gmail**, y que **reclama cada pago
 de forma atómica** para que nunca pueda usarse para pagar dos órdenes.
 
@@ -27,19 +27,20 @@ de forma atómica** para que nunca pueda usarse para pagar dos órdenes.
 
 1. [Arquitectura](#arquitectura)
 2. [Instalación](#instalación)
-3. [Variables de entorno](#variables-de-entorno)
-4. [Gmail: App Password](#gmail-método-a--app-password)
-5. [Gmail: OAuth2](#gmail-método-b--oauth2--xoauth2)
-6. [Iniciar la API y el worker](#iniciar-la-api-y-el-worker)
-7. [Migraciones](#migraciones)
-8. [Tests, lint y type checking](#tests-lint-y-type-checking)
-9. [Introducir un email Binance real como fixture](#cómo-introducir-un-email-binance-real-como-fixture)
-10. [Configurar remitentes permitidos](#configurar-remitentes-permitidos)
-11. [Probar `/v1/payments/verify`](#probar-v1paymentsverify)
-12. [Anti-replay, idempotencia y concurrencia](#anti-replay-idempotencia-y-concurrencia)
-13. [Seguridad](#seguridad)
-14. [Binance Pay API (futuro)](#binance-pay-api-futuro)
-15. [Riesgos y limitaciones](#riesgos-y-limitaciones-de-verificar-pagos-mediante-email)
+3. [Supabase (almacenamiento)](#supabase-almacenamiento)
+4. [Variables de entorno](#variables-de-entorno)
+5. [Gmail: App Password](#gmail-método-a--app-password)
+6. [Gmail: OAuth2](#gmail-método-b--oauth2--xoauth2)
+7. [Iniciar la API y el worker](#iniciar-la-api-y-el-worker)
+8. [Migraciones](#migraciones)
+9. [Tests, lint y type checking](#tests-lint-y-type-checking)
+10. [Introducir un email Binance real como fixture](#cómo-introducir-un-email-binance-real-como-fixture)
+11. [Configurar remitentes permitidos](#configurar-remitentes-permitidos)
+12. [Probar `/v1/payments/verify`](#probar-v1paymentsverify)
+13. [Anti-replay, idempotencia y concurrencia](#anti-replay-idempotencia-y-concurrencia)
+14. [Seguridad](#seguridad)
+15. [Binance Pay API (futuro)](#binance-pay-api-futuro)
+16. [Riesgos y limitaciones](#riesgos-y-limitaciones-de-verificar-pagos-mediante-email)
 
 ---
 
@@ -104,7 +105,8 @@ alembic/      env.py, versions/
 tests/        unit/, integration/, fixtures/binance/*.eml, emails.py
 ```
 
-**Stateless:** nada necesario para operar se guarda en el filesystem. PostgreSQL es la
+**Stateless, sin almacenamiento interno:** nada necesario para operar se guarda en el
+filesystem ni en los contenedores. La base de datos es **Supabase** (PostgreSQL gestionado),
 fuente de verdad de mensajes sincronizados, pagos, claims, cursores IMAP, cuentas,
 rate limiting y locks (advisory locks). La imagen Docker funciona con rootfs read-only.
 
@@ -114,7 +116,7 @@ garantías adicionales para el volumen esperado.
 
 ## Instalación
 
-Requisitos: Python **3.14+**, PostgreSQL 14+ (o Docker).
+Requisitos: Python **3.14+** y un proyecto de **Supabase** (o cualquier PostgreSQL 14+).
 
 ```bash
 python3.14 -m venv .venv
@@ -123,13 +125,66 @@ pip install -e ".[dev]"
 cp .env.example .env          # y rellena los valores
 ```
 
-Con Docker Compose (API + worker + PostgreSQL + migraciones automáticas):
+Con Docker Compose (API + worker + migraciones automáticas contra Supabase):
 
 ```bash
-cp .env.example .env          # rellena API_KEYS, GMAIL_*, BINANCE_ALLOWED_*, etc.
+cp .env.example .env          # DATABASE_URL de Supabase, API_KEYS, GMAIL_*, BINANCE_ALLOWED_*…
 docker compose up --build
 curl http://127.0.0.1:8000/health
 ```
+
+Para desarrollo sin conexión existe un PostgreSQL local opcional:
+`docker compose --profile local-db up --build` (y en `.env`
+`DATABASE_URL=postgresql://binance:binance@postgres:5432/binance_pay`).
+
+## Supabase (almacenamiento)
+
+Supabase es PostgreSQL gestionado, así que **toda** la persistencia vive allí: mensajes
+sincronizados, pagos, claims (anti-replay), idempotencia, cursores IMAP, cuentas de correo
+con credenciales cifradas, rate limiting y locks entre réplicas. La API y el worker no
+guardan nada localmente y pueden ejecutarse en cualquier sitio (Docker, Render, Fly.io,
+Railway, Cloud Run…) apuntando al mismo proyecto.
+
+1. Crea un proyecto en <https://supabase.com/dashboard> y guarda la contraseña de la base
+   de datos.
+2. Pulsa **Connect** y copia una cadena de conexión. Pégala tal cual en `DATABASE_URL`
+   (se aceptan `postgres://` y `postgresql://`; el driver psycopg se elige solo):
+
+   | Modo | URL | Uso |
+   |---|---|---|
+   | **Session pooler** (recomendado) | `postgresql://postgres.<ref>:<pass>@aws-0-<region>.pooler.supabase.com:5432/postgres` | API, worker y migraciones. Funciona con IPv4 |
+   | Direct connection | `postgresql://postgres:<pass>@db.<ref>.supabase.co:5432/postgres` | Igual que session; solo IPv6 salvo add-on IPv4 |
+   | Transaction pooler | `…pooler.supabase.com:6543/postgres` | Serverless. Soportado; no lo uses para migraciones |
+
+3. Aplica las migraciones: `alembic upgrade head` (en Docker Compose lo hace el servicio
+   `migrate`).
+4. Arranca la API y el worker. `GET /ready` confirma la conexión y que el esquema existe.
+
+Qué hace la aplicación automáticamente con Supabase:
+
+* **TLS obligatorio** (`sslmode=require`) para hosts `*.supabase.co`/`*.supabase.com`.
+  Para verificar también el certificado: descarga el certificado CA desde el dashboard
+  (*Database Settings → SSL*) y usa `DATABASE_SSL_MODE=verify-full` añadiendo
+  `?sslrootcert=/ruta/ca.crt` a la URL.
+* **Pooler en modo transacción** (puerto 6543, detectado solo o con
+  `DATABASE_POOLER_MODE=transaction`): desactiva los prepared statements y las
+  opciones de arranque (no soportadas por Supavisor) y cambia el lock de sincronización a
+  `pg_try_advisory_xact_lock` dentro de una transacción. Las garantías anti-replay no
+  cambian (`SELECT … FOR UPDATE` + `UNIQUE` dentro de una transacción funcionan igual).
+* **Tablas cerradas a la Data API de Supabase:** la migración `0002` activa **Row Level
+  Security** sin políticas en todas las tablas y revoca los privilegios de los roles
+  `anon` y `authenticated`. Ni con la *anon key* ni con un usuario autenticado se pueden
+  leer pagos, claims o credenciales cifradas vía REST/GraphQL. El backend conecta como
+  `postgres` (propietario de las tablas), por lo que no le afecta.
+* No uses la *service_role key* ni el cliente HTTP de Supabase: el backend habla
+  PostgreSQL directamente, que es lo que permite transacciones y locks.
+
+Tamaño del pool: `DATABASE_POOL_SIZE` + `DATABASE_MAX_OVERFLOW` por réplica (API y worker)
+debe caber en el límite de conexiones de tu plan de Supabase. En modo transacción el
+pooler multiplexa conexiones y el límite pesa menos.
+
+Copias de seguridad, point-in-time recovery y monitorización quedan a cargo de Supabase
+según tu plan.
 
 ## Variables de entorno
 
@@ -137,7 +192,8 @@ Todas están documentadas en [`.env.example`](.env.example). Las esenciales:
 
 | Variable | Descripción |
 |---|---|
-| `DATABASE_URL` | `postgresql+psycopg://user:pass@host:5432/db` |
+| `DATABASE_URL` | Cadena de conexión de Supabase (o cualquier PostgreSQL), pegada tal cual |
+| `DATABASE_SSL_MODE` / `DATABASE_POOLER_MODE` | Opcionales: por defecto `require` en Supabase y modo de pooler autodetectado |
 | `API_KEYS` | Claves (≥ 32 caracteres, separadas por coma) para `/v1/payments/verify` |
 | `ADMIN_API_KEYS` | Claves para `/v1/admin/*` (distintas de las anteriores) |
 | `CREDENTIALS_ENCRYPTION_KEY` | Master key AES-256-GCM (32 bytes base64). Obligatoria en producción |
@@ -247,13 +303,16 @@ alembic revision --autogenerate -m "describe change"   # nueva migración
 alembic check                 # verifica que modelos y migraciones coinciden
 ```
 
-La URL sale de `DATABASE_URL` (nunca de `alembic.ini`). En Docker Compose el servicio
-`migrate` ejecuta `alembic upgrade head` antes de arrancar `api` y `worker`.
+La URL sale de `DATABASE_URL` (nunca de `alembic.ini`). Con Supabase usa la URL del
+*session pooler* o la conexión directa para migrar. En Docker Compose el servicio `migrate`
+ejecuta `alembic upgrade head` antes de arrancar `api` y `worker`.
 
 ## Tests, lint y type checking
 
 Los tests de integración necesitan PostgreSQL (se omiten si no está disponible). Usan una
-base de datos dedicada que **se borra y recrea**:
+base de datos dedicada que **se borra y recrea**: usa un PostgreSQL local o de CI, **nunca
+tu proyecto de Supabase de producción**. Los tests crean los roles `anon` y
+`authenticated` para comprobar el bloqueo de la Data API de Supabase.
 
 ```bash
 createdb binance_pay_test
