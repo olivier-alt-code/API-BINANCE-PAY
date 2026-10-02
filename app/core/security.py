@@ -15,7 +15,10 @@ from starlette.types import ASGIApp
 
 from app.config import Settings, get_settings
 
-_bearer = HTTPBearer(auto_error=False, description="API key: `Authorization: Bearer <API_KEY>`")
+bearer_scheme = HTTPBearer(
+    auto_error=False,
+    description="Client token (`bpv_…`) or, for /v1/admin/*, the owner admin key.",
+)
 
 
 def _matches_any(candidate: str, keys: Sequence[SecretStr]) -> bool:
@@ -39,40 +42,24 @@ def _settings_for(request: Request) -> Settings:
     return container.settings if container is not None else get_settings()
 
 
-def _unauthorized() -> HTTPException:
+def unauthorized() -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Invalid or missing API key",
+        detail="Invalid, revoked or missing token",
         headers={"WWW-Authenticate": "Bearer"},
     )
 
 
-async def require_api_key(
-    request: Request,
-    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
-) -> str:
-    settings = _settings_for(request)
-    if credentials is None or not settings.api_keys:
-        raise _unauthorized()
-    if not _matches_any(credentials.credentials, settings.api_keys):
-        raise _unauthorized()
-    fingerprint = api_key_fingerprint(credentials.credentials)
-    request.state.client_id = fingerprint
-    return fingerprint
-
-
 async def require_admin_key(
     request: Request,
-    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
 ) -> str:
     settings = _settings_for(request)
     if credentials is None or not settings.admin_api_keys:
-        raise _unauthorized()
+        raise unauthorized()
     if not _matches_any(credentials.credentials, settings.admin_api_keys):
-        raise _unauthorized()
-    fingerprint = api_key_fingerprint(credentials.credentials)
-    request.state.client_id = fingerprint
-    return fingerprint
+        raise unauthorized()
+    return "admin:" + api_key_fingerprint(credentials.credentials)
 
 
 _DOCS_PATHS = ("/docs", "/redoc", "/openapi.json")

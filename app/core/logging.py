@@ -113,19 +113,10 @@ def configure_logging(
     root = logging.getLogger()
     root.handlers = [handler]
     root.setLevel(level.upper())
-    # imaplib debug output could include credentials; keep it silent.
-    for noisy in ("imaplib", "httpx", "httpcore"):
+    # HTTP client debug output could include signed URLs/headers; keep it silent.
+    for noisy in ("httpx", "httpcore"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
     for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
         lg = logging.getLogger(name)
         lg.handlers = []
         lg.propagate = True
-
-
-def mask_email(email: str | None) -> str | None:
-    """``john.doe@gmail.com`` -> ``jo******@gmail.com``."""
-    if not email or "@" not in email:
-        return email
-    local, _, domain = email.partition("@")
-    visible = local[:2] if len(local) > 2 else local[:1]
-    return f"{visible}{'*' * max(len(local) - len(visible), 3)}@{domain}"

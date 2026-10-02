@@ -60,10 +60,10 @@ services:
       migrate:
         condition: service_completed_successfully
 
-  # Periodic Gmail sync. Safe to scale (`--scale worker=2`): PostgreSQL advisory locks.
+  # Imports every client's Binance Pay transfers. Safe to scale: PostgreSQL advisory locks.
   worker:
     <<: *app
-    command: ["python", "-m", "app.workers.mail_sync_worker"]
+    command: ["python", "-m", "app.workers.sync_worker"]
     depends_on:
       postgres:
         condition: service_healthy

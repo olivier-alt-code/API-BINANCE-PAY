@@ -10,7 +10,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Payment
-from app.integrations.binance.templates import PaymentStatus
+from app.integrations.binance.evidence import PaymentStatus
 
 
 class StoreOutcome(StrEnum):
@@ -22,43 +22,50 @@ class StoreOutcome(StrEnum):
 
 @dataclass(frozen=True)
 class NewPayment:
+    tenant_id: int
     source: str
     external_id: str
-    email_message_id: int | None
     payment_code: str
     amount: Decimal
     asset: str
     payment_status: str
     received_at: datetime
     trusted: bool
-    template: str | None
+    payer_name: str | None = None
+    payer_binance_id: str | None = None
 
 
 class PaymentRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._s = session
 
-    async def find_best_by_code(self, payment_code: str) -> Payment | None:
-        """Exact (``=``) match only. Trusted evidence wins; otherwise the newest untrusted."""
+    async def find_best_by_code(
+        self, tenant_id: int, payment_code: str, *, source: str | None = None
+    ) -> Payment | None:
+        """Exact (``=``) match within ONE tenant. Trusted evidence wins."""
+        stmt = select(Payment).where(
+            Payment.tenant_id == tenant_id, Payment.payment_code == payment_code
+        )
+        if source is not None:
+            stmt = stmt.where(Payment.source == source)
         return await self._s.scalar(
-            select(Payment)
-            .where(Payment.payment_code == payment_code)
-            .order_by(Payment.trusted.desc(), Payment.received_at.desc(), Payment.id.desc())
-            .limit(1)
+            stmt.order_by(
+                Payment.trusted.desc(), Payment.received_at.desc(), Payment.id.desc()
+            ).limit(1)
         )
 
     async def store(self, new: NewPayment) -> StoreOutcome:
         """Insert evidence, deduplicating by (source, external_id) and by trusted code.
 
         Must run inside a transaction. Concurrency-safe thanks to the unique indexes:
-        two workers processing the same email can never create two payments.
+        two workers importing the same transfer can never create two payments.
         """
         stmt = (
             insert(Payment)
             .values(
+                tenant_id=new.tenant_id,
                 source=new.source,
                 external_id=new.external_id,
-                email_message_id=new.email_message_id,
                 payment_code=new.payment_code,
                 amount=new.amount,
                 asset=new.asset,
@@ -66,7 +73,8 @@ class PaymentRepository:
                 received_at=new.received_at,
                 trusted=new.trusted,
                 ambiguous=False,
-                template=new.template,
+                payer_name=new.payer_name,
+                payer_binance_id=new.payer_binance_id,
             )
             .on_conflict_do_nothing()
             .returning(Payment.id)
@@ -76,7 +84,9 @@ class PaymentRepository:
 
         same_source = await self._s.scalar(
             select(Payment.id).where(
-                Payment.source == new.source, Payment.external_id == new.external_id
+                Payment.tenant_id == new.tenant_id,
+                Payment.source == new.source,
+                Payment.external_id == new.external_id,
             )
         )
         if same_source is not None or not new.trusted:
@@ -85,7 +95,11 @@ class PaymentRepository:
         # Another trusted payment already exists with this code: compare.
         existing = await self._s.scalar(
             select(Payment)
-            .where(Payment.payment_code == new.payment_code, Payment.trusted)
+            .where(
+                Payment.tenant_id == new.tenant_id,
+                Payment.payment_code == new.payment_code,
+                Payment.trusted,
+            )
             .with_for_update()
         )
         if existing is None:  # pragma: no cover - deleted concurrently

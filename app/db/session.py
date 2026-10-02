@@ -17,8 +17,8 @@ def create_engine(settings: Settings) -> AsyncEngine:
     db = settings.database  # local PostgreSQL or Supabase (direct / session / transaction pooler)
     return create_async_engine(
         db.url,
-        pool_size=settings.database_pool_size,
-        max_overflow=settings.database_max_overflow,
+        pool_size=settings.db_pool_max,
+        max_overflow=0,  # DB_POOL_MAX is a hard cap
         pool_timeout=settings.database_pool_timeout_seconds,
         pool_pre_ping=True,
         # Never echo SQL: parameters could contain encrypted credentials.

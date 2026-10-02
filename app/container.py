@@ -1,4 +1,4 @@
-"""Composition root: wires settings, DB, mail integration and services together.
+"""Composition root: wires settings, DB, Binance integration and services together.
 
 One container per process. It holds no business state: everything that matters lives in
 PostgreSQL, so any number of replicas can run side by side.
@@ -10,23 +10,24 @@ import logging
 from dataclasses import dataclass
 from datetime import timedelta
 
+from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from app.config import Settings
 from app.core.encryption import CredentialCipher, build_cipher
 from app.core.exceptions import ConfigurationError
-from app.integrations.binance.email_parser import BinanceEmailParser
-from app.integrations.binance.email_validator import EmailTrustValidator, TrustPolicy
+from app.integrations.binance.account_api import BinancePayHistoryClient
 from app.integrations.binance.evidence import PaymentEvidenceProvider
-from app.integrations.binance.templates import select_templates
-from app.integrations.mail.base import MailProviderFactory
-from app.integrations.mail.factory import GmailProviderFactory
-from app.integrations.mail.gmail_oauth import GoogleOAuthClient, OAuthStateCodec
-from app.services.email_evidence import BinanceEmailPaymentProvider
-from app.services.mail_sync import MailSyncService
+from app.services.binance_api_sync import BinanceApiSyncService, BinancePayHistoryProvider
+from app.services.binance_credentials import (
+    BinanceAccountClient,
+    BinanceCredentialService,
+    ClientFactory,
+)
 from app.services.payment_claim import PaymentClaimService
 from app.services.payment_verifier import PaymentVerifier
 from app.services.rate_limiter import RateLimiter
+from app.services.tenants import TenantService
 
 logger = logging.getLogger(__name__)
 
@@ -37,15 +38,27 @@ class Container:
     engine: AsyncEngine
     sessionmaker: async_sessionmaker[AsyncSession]
     cipher: CredentialCipher | None
-    oauth_client: GoogleOAuthClient
-    oauth_state: OAuthStateCodec | None
-    parser: BinanceEmailParser
-    validator: EmailTrustValidator
-    sync_service: MailSyncService
+    tenants: TenantService
+    credentials: BinanceCredentialService
+    api_sync_service: BinanceApiSyncService
     evidence_provider: PaymentEvidenceProvider
     claim_service: PaymentClaimService
     verifier: PaymentVerifier
     rate_limiter: RateLimiter
+
+
+def default_client_factory(settings: Settings) -> ClientFactory:
+    def factory(api_key: SecretStr, api_secret: SecretStr) -> BinanceAccountClient:
+        return BinancePayHistoryClient(
+            api_key=api_key,
+            api_secret=api_secret,
+            base_url=settings.binance_api_base_url,
+            timeout_seconds=settings.binance_api_timeout_seconds,
+            recv_window_ms=settings.binance_api_recv_window_ms,
+            max_retries=settings.binance_api_max_retries,
+        )
+
+    return factory
 
 
 def build_container(
@@ -53,7 +66,7 @@ def build_container(
     engine: AsyncEngine,
     sessionmaker: async_sessionmaker[AsyncSession],
     *,
-    provider_factory: MailProviderFactory | None = None,
+    client_factory: ClientFactory | None = None,
 ) -> Container:
     cipher: CredentialCipher | None = None
     if settings.credentials_encryption_key is not None:
@@ -63,40 +76,19 @@ def build_container(
         )
     elif settings.is_production:
         raise ConfigurationError("CREDENTIALS_ENCRYPTION_KEY is required in production")
+    else:
+        logger.warning("credentials_encryption_key_missing_binance_credentials_disabled")
 
-    oauth_client = GoogleOAuthClient(
-        client_id=settings.google_client_id,
-        client_secret=settings.google_client_secret,
-        redirect_uri=settings.google_redirect_uri,
-        timeout_seconds=settings.mail_imap_timeout_seconds,
-    )
-    oauth_state = (
-        OAuthStateCodec(cipher, settings.google_oauth_state_ttl_seconds) if cipher else None
-    )
-    templates = select_templates(
-        allow_simulated=settings.simulated_templates_allowed,
-        enabled_names=settings.binance_enabled_templates,
-    )
-    if not templates:
-        logger.warning("no_binance_templates_enabled")
-    parser = BinanceEmailParser(
-        templates, case_insensitive_code=settings.payment_code_case_insensitive
-    )
-    validator = EmailTrustValidator(TrustPolicy.from_settings(settings))
-    factory = provider_factory or GmailProviderFactory(
-        settings, cipher=cipher, oauth_client=oauth_client
-    )
-    sync_service = MailSyncService(
-        settings=settings,
-        engine=engine,
+    credentials = BinanceCredentialService(
         sessionmaker=sessionmaker,
-        provider_factory=factory,
-        validator=validator,
-        parser=parser,
         cipher=cipher,
+        client_factory=client_factory or default_client_factory(settings),
     )
-    evidence_provider = BinanceEmailPaymentProvider(
-        settings=settings, sessionmaker=sessionmaker, sync_service=sync_service
+    api_sync_service = BinanceApiSyncService(
+        settings=settings, engine=engine, sessionmaker=sessionmaker, credentials=credentials
+    )
+    evidence_provider = BinancePayHistoryProvider(
+        sessionmaker=sessionmaker, sync_service=api_sync_service
     )
     claim_service = PaymentClaimService(sessionmaker)
     verifier = PaymentVerifier(
@@ -111,11 +103,11 @@ def build_container(
         engine=engine,
         sessionmaker=sessionmaker,
         cipher=cipher,
-        oauth_client=oauth_client,
-        oauth_state=oauth_state,
-        parser=parser,
-        validator=validator,
-        sync_service=sync_service,
+        tenants=TenantService(
+            sessionmaker, last_used_update_seconds=settings.token_last_used_update_seconds
+        ),
+        credentials=credentials,
+        api_sync_service=api_sync_service,
         evidence_provider=evidence_provider,
         claim_service=claim_service,
         verifier=verifier,

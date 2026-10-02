@@ -1,398 +1,184 @@
 # Binance Payment Verifier
 
-API backend (FastAPI + **Supabase**/PostgreSQL) que **verifica pagos recibidos en Binance** leyendo las
-notificaciones de pago que Binance envía a una cuenta **Gmail**, y que **reclama cada pago
-de forma atómica** para que nunca pueda usarse para pagar dos órdenes.
+API backend privada (FastAPI + **Supabase**/PostgreSQL) que **verifica pagos recibidos en
+Binance Pay** consultando la API oficial de historial de pagos de la cuenta de Binance de
+cada cliente, y que **reclama cada pago de forma atómica** para que nunca pueda usarse para
+pagar dos órdenes.
 
-> ## ⚠️ Nunca proporciones la contraseña normal de tu cuenta de Google
->
-> Esta aplicación se conecta a Gmail **solo** con una **App Password** (contraseña de
-> aplicación de 16 letras) o con **OAuth2**. La configuración rechaza cualquier valor de
-> `GMAIL_APP_PASSWORD` que no tenga el formato de una App Password. La autenticación con
-> la contraseña normal está implementada pero **deshabilitada** y no debe activarse.
-
-> ## ⚠️ Formato del email de Binance: todavía SIMULADO
->
-> Al escribir este proyecto no se disponía de una notificación real de Binance. Las
-> plantillas del parser y las fixtures `.eml` son **simuladas** y están marcadas como tal.
-> En producción (`APP_ENV=production`) las plantillas simuladas están **desactivadas**:
-> `/ready` devolverá `not_ready` hasta que añadas la plantilla real
-> (ver [Introducir un email Binance real](#cómo-introducir-un-email-binance-real-como-fixture)).
-> Toda esa incertidumbre está aislada en un único archivo:
-> `app/integrations/binance/templates.py`.
+* **Privada y multi-cliente:** tú (el dueño) decides quién la usa. Cada persona a la que
+  das acceso es un *cliente* con su propio **token privado** (`bpv_…`) y su propia cuenta
+  de Binance. Ningún cliente puede ver ni reclamar pagos de otro.
+* **Sin claves de Binance en el `.env`:** cada cliente registra **su** API key de Binance
+  (**solo lectura**, se verifica) mediante un endpoint; se guarda **cifrada** en Supabase.
+* **Sin estado local:** todo vive en Supabase (pagos, claims, tokens, credenciales cifradas,
+  cursores, rate limiting y locks entre réplicas).
 
 ---
 
 ## Índice
 
-1. [Arquitectura](#arquitectura)
-2. [Instalación](#instalación)
-3. [Supabase (almacenamiento)](#supabase-almacenamiento)
-4. [Variables de entorno](#variables-de-entorno)
-5. [Gmail: App Password](#gmail-método-a--app-password)
-6. [Gmail: OAuth2](#gmail-método-b--oauth2--xoauth2)
-7. [Iniciar la API y el worker](#iniciar-la-api-y-el-worker)
-8. [Migraciones](#migraciones)
+1. [Cómo funciona el acceso](#cómo-funciona-el-acceso)
+2. [Puesta en marcha](#puesta-en-marcha)
+3. [Dar acceso a alguien (clientes y tokens)](#dar-acceso-a-alguien-clientes-y-tokens)
+4. [Registrar la API key de Binance de un cliente](#registrar-la-api-key-de-binance-de-un-cliente)
+5. [Verificar pagos](#verificar-pagos)
+6. [Supabase (almacenamiento)](#supabase-almacenamiento)
+7. [Arquitectura](#arquitectura)
+8. [Variables de entorno](#variables-de-entorno)
 9. [Tests, lint y type checking](#tests-lint-y-type-checking)
-10. [Introducir un email Binance real como fixture](#cómo-introducir-un-email-binance-real-como-fixture)
-11. [Configurar remitentes permitidos](#configurar-remitentes-permitidos)
-12. [Probar `/v1/payments/verify`](#probar-v1paymentsverify)
-13. [Anti-replay, idempotencia y concurrencia](#anti-replay-idempotencia-y-concurrencia)
-14. [Seguridad](#seguridad)
-15. [Binance Pay API (futuro)](#binance-pay-api-futuro)
-16. [Riesgos y limitaciones](#riesgos-y-limitaciones-de-verificar-pagos-mediante-email)
+10. [Anti-replay, idempotencia y concurrencia](#anti-replay-idempotencia-y-concurrencia)
+11. [Seguridad](#seguridad)
+12. [Riesgos y limitaciones](#riesgos-y-limitaciones)
 
 ---
 
-## Arquitectura
+## Cómo funciona el acceso
+
+Hay dos tipos de credencial:
+
+| Quién | Credencial | Dónde vive | Para qué |
+|---|---|---|---|
+| **Tú (dueño)** | Clave maestra de admin | `ADMIN_API_KEYS` en el entorno del servidor | `/v1/admin/*`: crear clientes, emitir y revocar tokens |
+| **Cada cliente** (tú incluido) | Token privado `bpv_…` | Solo el **hash** en Supabase | `/v1/me/*` y `/v1/payments/verify` |
+
+Flujo completo:
 
 ```
-POST /v1/payments/verify
-        │
-        ▼
-PaymentVerifier ──────────────► PaymentEvidenceProvider (Protocol)
-  │  formato del código              │
-  │  confianza / asset / monto       ├── BinanceEmailPaymentProvider  (hoy)
-  │  estado / ventana temporal       │      1. busca en PostgreSQL (igualdad exacta)
-  │                                  │      2. si no está → MailSyncService (on-demand)
-  │                                  │      3. vuelve a buscar
-  │                                  └── BinancePayApiProvider       (preparado, no activo)
-  ▼
-PaymentClaimService ── transacción PostgreSQL: SELECT … FOR UPDATE + UNIQUE(payment_id)
-        │
-        ▼
-     VERIFIED / ALREADY_CLAIMED / …
+Dueño ── POST /v1/admin/clients {"name": "Ana"} ──► token de Ana (se muestra UNA vez)
+           │
+           └── le pasas el token a Ana por un canal privado
 
-MailSyncService (worker periódico + on-demand)
-  MailProvider (Protocol) ── GmailImapProvider (IMAP SSL, App Password o XOAUTH2)
-        │ UIDs > último UID procesado (cursor + UIDVALIDITY), BODY.PEEK[]
-        ▼
-  EmailTrustValidator  → remitente exacto, Message-ID, Authentication-Results (DKIM/SPF/DMARC)
-  BinanceEmailParser   → plantillas centralizadas → ParsedBinancePayment
-        ▼
-  PostgreSQL: email_messages, payments (dedupe por UID, Message-ID y payment_code)
+Ana ──── PUT /v1/me/binance-credentials {apiKey, apiSecret} ──► verificada (solo lectura)
+           │                                                     y guardada cifrada
+           └── POST /v1/payments/verify {paymentCode, expectedAmount, …} ──► VERIFIED
 ```
 
-Separación de responsabilidades:
+Tú también eres un cliente: créate a ti mismo con `POST /v1/admin/clients` y usa tu token
+para tus verificaciones. La clave maestra solo sirve para administrar.
 
-| Responsabilidad | Módulo |
-|---|---|
-| Conexión al buzón | `app/integrations/mail/` (`base.py`, `gmail_imap.py`, `gmail_oauth.py`, `factory.py`) |
-| Sincronización | `app/services/mail_sync.py`, `app/workers/mail_sync_worker.py` |
-| Autenticidad del email | `app/integrations/binance/email_validator.py` |
-| Parsing MIME / HTML | `app/integrations/binance/email_parser.py` |
-| Formato Binance (regex) | `app/integrations/binance/templates.py` (**único lugar**) |
-| Evidencia neutral | `app/integrations/binance/evidence.py` (`PaymentEvidence`, `PaymentEvidenceProvider`) |
-| Almacenamiento | `app/db/models`, `app/db/repositories/` |
-| Verificación | `app/services/payment_verifier.py` |
-| Claim / idempotencia | `app/services/payment_claim.py` |
-| HTTP | `app/api/routes/` (`payments.py`, `gmail.py`, `health.py`) |
-| Composición | `app/container.py` |
-
-```
-app/
-  main.py  config.py  container.py
-  api/        deps.py, routes/{health,gmail,payments}.py
-  core/       security.py, encryption.py, logging.py, exceptions.py
-  db/         base.py, session.py, models/, repositories/
-  integrations/
-    mail/     base.py, gmail_imap.py, gmail_oauth.py, factory.py
-    binance/  email_parser.py, email_validator.py, templates.py, evidence.py, pay_api.py
-  services/   mail_sync.py, email_evidence.py, payment_verifier.py, payment_claim.py, rate_limiter.py
-  schemas/    gmail.py, payments.py
-  workers/    mail_sync_worker.py
-alembic/      env.py, versions/
-tests/        unit/, integration/, fixtures/binance/*.eml, emails.py
-```
-
-**Stateless, sin almacenamiento interno:** nada necesario para operar se guarda en el
-filesystem ni en los contenedores. La base de datos es **Supabase** (PostgreSQL gestionado),
-fuente de verdad de mensajes sincronizados, pagos, claims, cursores IMAP, cuentas,
-rate limiting y locks (advisory locks). La imagen Docker funciona con rootfs read-only.
-
-**Redis no se usa:** PostgreSQL ya cubre rate limiting compartido (contadores de ventana
-fija), locks distribuidos (advisory locks) e idempotencia. Añadir Redis no aportaba
-garantías adicionales para el volumen esperado.
-
-## Instalación
+## Puesta en marcha
 
 Requisitos: Python **3.14+** y un proyecto de **Supabase** (o cualquier PostgreSQL 14+).
 
 ```bash
-python3.14 -m venv .venv
-source .venv/bin/activate
+python3.14 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-cp .env.example .env          # y rellena los valores
+cp .env.example .env
 ```
 
-Con Docker Compose (API + worker + migraciones automáticas contra Supabase):
-
-```bash
-cp .env.example .env          # DATABASE_URL de Supabase, API_KEYS, GMAIL_*, BINANCE_ALLOWED_*…
-docker compose up --build
-curl http://127.0.0.1:8000/health
-```
-
-Para desarrollo sin conexión existe un PostgreSQL local opcional:
-`docker compose --profile local-db up --build` (y en `.env`
-`DATABASE_URL=postgresql://binance:binance@postgres:5432/binance_pay`).
-
-## Supabase (almacenamiento)
-
-Supabase es PostgreSQL gestionado, así que **toda** la persistencia vive allí: mensajes
-sincronizados, pagos, claims (anti-replay), idempotencia, cursores IMAP, cuentas de correo
-con credenciales cifradas, rate limiting y locks entre réplicas. La API y el worker no
-guardan nada localmente y pueden ejecutarse en cualquier sitio (Docker, Render, Fly.io,
-Railway, Cloud Run…) apuntando al mismo proyecto.
-
-1. Crea un proyecto en <https://supabase.com/dashboard> y guarda la contraseña de la base
-   de datos.
-2. Pulsa **Connect** y copia una cadena de conexión. Pégala tal cual en `DATABASE_URL`
-   (se aceptan `postgres://` y `postgresql://`; el driver psycopg se elige solo):
-
-   | Modo | URL | Uso |
-   |---|---|---|
-   | **Session pooler** (recomendado) | `postgresql://postgres.<ref>:<pass>@aws-0-<region>.pooler.supabase.com:5432/postgres` | API, worker y migraciones. Funciona con IPv4 |
-   | Direct connection | `postgresql://postgres:<pass>@db.<ref>.supabase.co:5432/postgres` | Igual que session; solo IPv6 salvo add-on IPv4 |
-   | Transaction pooler | `…pooler.supabase.com:6543/postgres` | Serverless. Soportado; no lo uses para migraciones |
-
-3. Aplica las migraciones: `alembic upgrade head` (en Docker Compose lo hace el servicio
-   `migrate`).
-4. Arranca la API y el worker. `GET /ready` confirma la conexión y que el esquema existe.
-
-Qué hace la aplicación automáticamente con Supabase:
-
-* **TLS obligatorio** (`sslmode=require`) para hosts `*.supabase.co`/`*.supabase.com`.
-  Para verificar también el certificado: descarga el certificado CA desde el dashboard
-  (*Database Settings → SSL*) y usa `DATABASE_SSL_MODE=verify-full` añadiendo
-  `?sslrootcert=/ruta/ca.crt` a la URL.
-* **Pooler en modo transacción** (puerto 6543, detectado solo o con
-  `DATABASE_POOLER_MODE=transaction`): desactiva los prepared statements y las
-  opciones de arranque (no soportadas por Supavisor) y cambia el lock de sincronización a
-  `pg_try_advisory_xact_lock` dentro de una transacción. Las garantías anti-replay no
-  cambian (`SELECT … FOR UPDATE` + `UNIQUE` dentro de una transacción funcionan igual).
-* **Tablas cerradas a la Data API de Supabase:** la migración `0002` activa **Row Level
-  Security** sin políticas en todas las tablas y revoca los privilegios de los roles
-  `anon` y `authenticated`. Ni con la *anon key* ni con un usuario autenticado se pueden
-  leer pagos, claims o credenciales cifradas vía REST/GraphQL. El backend conecta como
-  `postgres` (propietario de las tablas), por lo que no le afecta.
-* No uses la *service_role key* ni el cliente HTTP de Supabase: el backend habla
-  PostgreSQL directamente, que es lo que permite transacciones y locks.
-
-Tamaño del pool: `DATABASE_POOL_SIZE` + `DATABASE_MAX_OVERFLOW` por réplica (API y worker)
-debe caber en el límite de conexiones de tu plan de Supabase. En modo transacción el
-pooler multiplexa conexiones y el límite pesa menos.
-
-Copias de seguridad, point-in-time recovery y monitorización quedan a cargo de Supabase
-según tu plan.
-
-## Variables de entorno
-
-Todas están documentadas en [`.env.example`](.env.example). Las esenciales:
-
-| Variable | Descripción |
-|---|---|
-| `DATABASE_URL` | Cadena de conexión de Supabase (o cualquier PostgreSQL), pegada tal cual |
-| `DATABASE_SSL_MODE` / `DATABASE_POOLER_MODE` | Opcionales: por defecto `require` en Supabase y modo de pooler autodetectado |
-| `API_KEYS` | Claves (≥ 32 caracteres, separadas por coma) para `/v1/payments/verify` |
-| `ADMIN_API_KEYS` | Claves para `/v1/admin/*` (distintas de las anteriores) |
-| `CREDENTIALS_ENCRYPTION_KEY` | Master key AES-256-GCM (32 bytes base64). Obligatoria en producción |
-| `GMAIL_EMAIL`, `GMAIL_AUTH_METHOD` | Cuenta y método (`app_password` u `oauth2`) |
-| `GMAIL_APP_PASSWORD` | App Password de 16 letras (solo método A) |
-| `GOOGLE_CLIENT_ID/SECRET/REDIRECT_URI` | OAuth2 (método B) |
-| `BINANCE_ALLOWED_SENDERS` / `BINANCE_ALLOWED_DOMAINS` | Remitentes observados en emails reales |
-| `MAIL_INITIAL_LOOKBACK_HOURS` | Ventana del primer bootstrap (por defecto 48 h) |
-| `MAIL_SYNC_INTERVAL_SECONDS` | Intervalo del worker (por defecto 15 s) |
-| `MAX_PAYMENT_AGE_MINUTES` | Máximo permitido para `maxAgeMinutes` (por defecto 1440) |
-| `STORE_RAW_EMAILS` | `false` por defecto. Si se activa, el raw se guarda **cifrado** |
-| `EMAIL_REQUIRE_DKIM/SPF/DMARC` | Política de confianza (todo `true` por defecto) |
-| `PAYMENT_AMOUNT_TOLERANCE` | `0` = igualdad exacta (por defecto). Otra cosa es una decisión explícita |
-
-Generar claves:
-
-```bash
-python -c "import secrets; print(secrets.token_urlsafe(32))"                 # API keys
-python -c "from app.core.encryption import generate_key; print(generate_key())" # cifrado
-```
-
-`VAR=` vacío significa "no configurado".
-
-## Gmail método A — App Password
-
-1. Activa la **verificación en dos pasos** en la cuenta de Google
-   (Cuenta de Google → Seguridad → Verificación en dos pasos). Las App Passwords solo
-   existen con 2FA activo.
-2. Ve a <https://myaccount.google.com/apppasswords>, escribe un nombre (p. ej.
-   `binance-verifier`) y pulsa **Crear**.
-3. Google muestra **16 letras** (en 4 grupos). Cópialas en `GMAIL_APP_PASSWORD`
-   (con o sin espacios). Esa es la única "contraseña" que acepta esta aplicación.
-4. Comprueba que IMAP está disponible (Gmail → Configuración → Ver toda la configuración
-   → Reenvío y correo POP/IMAP; en cuentas recientes IMAP está siempre activo).
-5. Configura `GMAIL_EMAIL=tu-cuenta@gmail.com` y `GMAIL_AUTH_METHOD=app_password`.
-6. Prueba la conexión: `POST /v1/admin/mail/test` (ver más abajo).
-
-Notas:
-
-* La App Password **nunca se persiste**: se lee solo de la variable de entorno; no se
-  imprime en logs ni se devuelve por ningún endpoint.
-* Si no aparece la opción de App Passwords: la cuenta no tiene 2FA, usa Protección
-  Avanzada, o es Google Workspace con la opción deshabilitada por el administrador. En ese
-  caso usa OAuth2.
-* Revoca la App Password en la misma página si sospechas de una filtración.
-
-## Gmail método B — OAuth2 / XOAUTH2
-
-1. En <https://console.cloud.google.com/> crea (o elige) un proyecto.
-2. **Pantalla de consentimiento OAuth**: tipo *Internal* si es una cuenta Google Workspace
-   de tu organización; si es *External*, añade tu cuenta como *test user*.
-   El scope necesario para IMAP es `https://mail.google.com/` (scope restringido).
-3. **Credenciales → Crear ID de cliente OAuth → Aplicación web**. Añade como URI de
-   redirección autorizada exactamente `GOOGLE_REDIRECT_URI`, p. ej.
-   `https://tu-api.example.com/v1/admin/mail/oauth/callback`.
-4. Configura `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`,
-   `CREDENTIALS_ENCRYPTION_KEY` y `GMAIL_AUTH_METHOD=oauth2`.
-5. Obtén la URL de consentimiento:
+1. **Base de datos:** pega en `DATABASE_URL` la URL del *Transaction pooler* de Supabase y
+   ajusta `DB_POOL_MAX` (ver [Supabase](#supabase-almacenamiento)).
+2. **Genera tus dos secretos** y ponlos en `.env`:
 
    ```bash
-   curl -s -H "Authorization: Bearer $ADMIN_KEY" \
-     "https://tu-api.example.com/v1/admin/mail/oauth/authorize?login_hint=tu-cuenta@gmail.com"
+   python -m app.cli generate-admin-key        # -> ADMIN_API_KEYS
+   python -m app.cli generate-encryption-key   # -> CREDENTIALS_ENCRYPTION_KEY
    ```
 
-6. Abre `authorizationUrl` en el navegador y acepta. Google redirige al callback, que:
-   valida el `state` (token **cifrado** con el verificador PKCE y caducidad, sin estado en
-   servidor), intercambia el código, lee el email verificado de la cuenta y guarda el
-   **refresh token cifrado (AES-256-GCM)** en `mail_accounts`.
-7. El access token se obtiene en cada réplica a partir del refresh token y solo se cachea
-   en memoria (es una caché, no estado).
+   Se generan **una sola vez** (no en cada arranque) y se guardan como secretos del entorno.
+   Guárdalos también en un gestor de contraseñas. Si pierdes o cambias la clave de cifrado,
+   las API keys de Binance guardadas no se podrán leer (los clientes tendrían que
+   registrarlas de nuevo).
+3. **Migraciones:** `alembic upgrade head` (con Docker Compose se aplican solas en cada
+   arranque, mediante el servicio `migrate`).
+4. **Arranca** la API y el worker:
 
-Alternativa headless: define `GMAIL_OAUTH_REFRESH_TOKEN` (se guarda cifrado al arrancar la
-sincronización).
+   ```bash
+   uvicorn --factory app.main:app_factory --host 0.0.0.0 --port 8000
+   python -m app.workers.sync_worker
+   ```
 
-> Con la app OAuth en estado *Testing* (External), Google caduca los refresh tokens a los
-> 7 días. Para uso continuado usa *Internal* (Workspace) o publica/verifica la app.
+   O con Docker Compose (migraciones + API + worker contra Supabase):
+   `docker compose up --build`.
+5. Comprueba `GET /ready`: `database`, `admin_key_configured` y `encryption_key` en `true`.
 
-## Iniciar la API y el worker
+En producción: `APP_ENV=production` (HSTS activado y `/docs` desactivado salvo
+`ENABLE_DOCS=true`) y TLS terminado en un proxy o en la plataforma de hosting.
+
+## Dar acceso a alguien (clientes y tokens)
+
+> 📘 **Guía completa de los endpoints de administración** (todos los campos, respuestas,
+> errores y ejemplos para PowerShell y curl): [`docs/admin-api.md`](docs/admin-api.md).
+
+Puedes hacerlo por **HTTP** (con tu clave maestra) o con la **CLI** del servidor. Cada
+token se muestra **una única vez**: cópialo y envíaselo a esa persona por un canal privado.
+
+**Por HTTP**:
 
 ```bash
-alembic upgrade head
-uvicorn --factory app.main:app_factory --host 0.0.0.0 --port 8000   # API
-python -m app.workers.mail_sync_worker                              # sync periódica
+ADMIN="Authorization: Bearer $ADMIN_KEY"
+
+# Crear un cliente -> devuelve su primer token
+curl -s -X POST https://tu-api/v1/admin/clients -H "$ADMIN" \
+     -H "Content-Type: application/json" -d '{"name": "Ana"}'
+# {"client": {"id": 2, "name": "Ana", ...}, "token": {"id": 5, "token": "bpv_...", ...}}
+
+# Otro token para el mismo cliente (p. ej. uno por servidor), opcionalmente con caducidad
+curl -s -X POST https://tu-api/v1/admin/clients/2/tokens -H "$ADMIN" \
+     -H "Content-Type: application/json" -d '{"name": "tienda", "expiresInDays": 90}'
+
+curl -s https://tu-api/v1/admin/clients -H "$ADMIN"            # listar clientes
+curl -s https://tu-api/v1/admin/clients/2/tokens -H "$ADMIN"   # tokens (sin su valor)
+curl -s -X DELETE https://tu-api/v1/admin/tokens/5 -H "$ADMIN" # revocar un token
+curl -s -X PATCH https://tu-api/v1/admin/clients/2 -H "$ADMIN" \
+     -H "Content-Type: application/json" -d '{"enabled": false}' # cortar todo su acceso
 ```
 
-* El worker puede ejecutarse en varias réplicas: un advisory lock de PostgreSQL por cuenta
-  evita trabajo duplicado y las constraints UNIQUE hacen idempotente el reprocesado.
-* Alternativa para despliegues pequeños: `RUN_SYNC_WORKER_IN_API=true` ejecuta el bucle
-  dentro del proceso de la API.
-* Aunque el worker no esté corriendo, `/v1/payments/verify` sincroniza on-demand cuando un
-  código no está todavía en la base de datos.
-* HTTPS: en producción termina TLS en un reverse proxy / load balancer. Con
-  `APP_ENV=production` se envía HSTS y la documentación OpenAPI se desactiva
-  (reactivable con `ENABLE_DOCS=true`).
-* Documentación interactiva (fuera de producción): <http://127.0.0.1:8000/docs>.
+Con `ENABLE_DOCS=true` puedes hacer lo mismo desde el navegador en `/docs` (botón
+**Authorize** con tu clave maestra).
 
-Health checks: `GET /health` (proceso vivo) y `GET /ready` (PostgreSQL + esquema migrado
-+ configuración esencial: API keys, remitentes Binance, plantillas activas, clave de
-cifrado válida, cuenta de correo). Ninguno expone secretos.
-
-## Migraciones
+**Por CLI** (en el servidor, o `docker compose exec api python -m app.cli …`):
 
 ```bash
-alembic upgrade head          # aplica
-alembic downgrade -1          # revierte la última
-alembic revision --autogenerate -m "describe change"   # nueva migración
-alembic check                 # verifica que modelos y migraciones coinciden
+python -m app.cli create-client "Ana"                 # imprime el token una vez
+python -m app.cli create-token 2 --name tienda --expires-in-days 90
+python -m app.cli list-clients
+python -m app.cli list-tokens 2
+python -m app.cli revoke-token 5
+python -m app.cli set-client-enabled 2 false
 ```
 
-La URL sale de `DATABASE_URL` (nunca de `alembic.ini`). Con Supabase usa la URL del
-*session pooler* o la conexión directa para migrar. En Docker Compose el servicio `migrate`
-ejecuta `alembic upgrade head` antes de arrancar `api` y `worker`.
+Buenas prácticas: un token por sistema que lo use (si uno se filtra, revocas solo ese),
+caducidad para accesos temporales, y nunca compartir la clave maestra.
 
-## Tests, lint y type checking
+## Registrar la API key de Binance de un cliente
 
-Los tests de integración necesitan PostgreSQL (se omiten si no está disponible). Usan una
-base de datos dedicada que **se borra y recrea**: usa un PostgreSQL local o de CI, **nunca
-tu proyecto de Supabase de producción**. Los tests crean los roles `anon` y
-`authenticated` para comprobar el bloqueo de la Data API de Supabase.
+Cada cliente lo hace **una vez**, con su token:
 
-```bash
-createdb binance_pay_test
-export TEST_DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/binance_pay_test
-pytest                       # unit + integración
-pytest tests/unit            # solo unitarios (sin base de datos)
-ruff check . && ruff format --check .
-mypy app                     # modo strict
-```
+1. En Binance → **Gestión de API** → *Crear API* (tipo "generada por el sistema").
+2. Deja activado **solo "Enable Reading"**. Nada de *Spot & Margin Trading*, *Withdrawals*,
+   *Internal Transfer*, *Universal Transfer*, *Futures* ni *Margin*.
+3. Opcional pero recomendado: restringe la key a la **IP del servidor** de esta API.
+4. Regístrala:
 
-Cobertura de los tests (entre otros): email válido, remitente falso (display name y
-lookalike), DKIM/SPF/DMARC fallidos, `Authentication-Results` falsificado, código correcto e
-incorrecto (prefijos/sufijos/caso), monto correcto e incorrecto, Decimal con distintas
-escalas, asset incorrecto, ventana temporal, email duplicado, payment code duplicado,
-evidencia contradictoria, claim, doble claim, **10 requests concurrentes para el mismo
-pago (exactamente 1 `VERIFIED`)**, misma `orderReference` repetida, dos instancias
-sincronizando a la vez, IMAP caído, timeout IMAP, HTML, texto plano y multipart.
+   ```bash
+   curl -s -X PUT https://tu-api/v1/me/binance-credentials \
+        -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+        -d '{"apiKey": "...", "apiSecret": "..."}'
+   # {"configured": true, "apiKeyHint": "…ab12", "ipRestricted": true, ...}
+   ```
 
-## Cómo introducir un email Binance real como fixture
+Antes de guardarla, la API consulta a Binance (`GET /sapi/v1/account/apiRestrictions`) y
+**rechaza (422) cualquier key que no sea de solo lectura**, indicando qué permiso sobra. La
+key nunca se guarda en ese caso. También comprueba que puede leer el historial de Binance
+Pay. La key y el secret se guardan cifrados con AES-256-GCM y **no se devuelven nunca**
+(solo los 4 últimos caracteres como referencia).
 
-1. Realiza (o recibe) un pago real de prueba en Binance hacia la cuenta asociada al Gmail.
-2. En Gmail abre la notificación → menú ⋮ → **Mostrar original** → **Descargar original**.
-   Obtienes un `.eml` con cabeceras completas.
-3. En "Mostrar original" anota:
-   * el remitente exacto (`From:`, la dirección entre `< >`, no el nombre visible);
-   * el dominio DKIM (`dkim=pass header.i=@…`), y que SPF y DMARC sean `PASS`;
-   * cómo aparecen el identificador del pago, el monto, el asset, el estado y la fecha.
-4. **Anonimiza** el archivo sin cambiar su estructura: sustituye nombres, emails
-   personales, IDs de usuario, IPs y enlaces de seguimiento. No cambies `From`, las
-   etiquetas de los campos (p. ej. "Amount") ni el HTML que las rodea. Si alteras el
-   cuerpo, la firma DKIM ya no verificará, pero eso no afecta a los tests (el validador
-   lee el resultado que Gmail dejó en `Authentication-Results`).
-5. Guárdalo como `tests/fixtures/binance/real_<tipo>_<aaaamm>.eml`.
-6. Añade en `app/integrations/binance/templates.py`, dentro de `REAL_TEMPLATES`, una
-   `BinanceEmailTemplate` con `simulated=False`: patrón del asunto, marcadores
-   obligatorios, regex del código (`CODE`), del monto (`AMOUNT` + `ASSET`), del estado
-   (con su `status_map`) y de la fecha. Reutiliza los bloques `CODE`, `AMOUNT`, `ASSET`.
-   Las regex se aplican al texto normalizado (HTML sin tags, entidades decodificadas,
-   espacios colapsados). Usa `python -c "from app.integrations.binance.email_parser import *; m=parse_mime(open('X.eml','rb').read()); print(body_texts(m))"` para verlo.
-7. Añade un test en `tests/unit/test_binance_email_parser.py` que parsee la fixture y
-   compruebe código, monto (`Decimal`), asset, estado y fecha.
-8. Configura `BINANCE_ALLOWED_SENDERS`/`BINANCE_ALLOWED_DOMAINS` con lo observado y, en
-   producción, deja `BINANCE_ALLOW_SIMULATED_TEMPLATES` vacío/`false`.
-9. Si el identificador de Binance no distingue mayúsculas/minúsculas (confírmalo),
-   activa `PAYMENT_CODE_CASE_INSENSITIVE=true` **antes** de importar pagos.
+Otros endpoints del cliente: `GET /v1/me` (quién soy), `GET /v1/me/binance-credentials`
+(estado), `DELETE /v1/me/binance-credentials` (borrarla), `POST /v1/me/binance/sync`
+(importar ahora los pagos recientes).
 
-Nada más en la aplicación necesita cambiar: el resto del código solo consume
-`ParsedBinancePayment` / `PaymentEvidence`.
+## Verificar pagos
 
-## Configurar remitentes permitidos
-
-No se incluye ninguna dirección de Binance hardcodeada. Usa **solo** lo observado en
-notificaciones reales (paso 3 anterior):
+El pagador te envía por Binance Pay y te comparte el **ID de la transacción** de su
+comprobante (formato `P_` + 16 caracteres). Tu sistema llama:
 
 ```bash
-BINANCE_ALLOWED_SENDERS=direccion-exacta-observada@dominio-observado
-BINANCE_ALLOWED_DOMAINS=dominio-observado            # coincidencia exacta del dominio
-# BINANCE_ALLOWED_DOMAINS=*.dominio-observado        # permite también subdominios
-```
-
-* Se compara la **dirección** del `From` (ASCII, parseo estricto), nunca el nombre visible.
-  Un `From` con varias direcciones o malformado se rechaza.
-* Si Binance usa varias direcciones para distintos tipos de notificación, añádelas
-  separadas por comas.
-* Estas listas también se usan como pre-filtro IMAP (`SEARCH FROM`), pero la autenticidad
-  se valida siempre en el cliente: remitente permitido + `Message-ID` válido + la cabecera
-  `Authentication-Results` **superior** emitida por `mx.google.com` (las inferiores pueden
-  estar falsificadas por el emisor) con DKIM `pass` alineado con el dominio del `From`,
-  SPF `pass` y DMARC `pass`. Cada requisito es configurable (`EMAIL_REQUIRE_*`).
-* Si no hay remitentes configurados, ningún email es de confianza (fail-closed).
-
-## Probar `/v1/payments/verify`
-
-```bash
-curl -s https://tu-api.example.com/v1/payments/verify \
-  -H "Authorization: Bearer $API_KEY" \
-  -H "Content-Type: application/json" \
+curl -s https://tu-api/v1/payments/verify \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{
-        "paymentCode": "PAY-82919381",
-        "expectedAmount": "25",
+        "paymentCode": "P_A99TESTPAYX71116",
+        "expectedAmount": "98.814",
         "asset": "USDT",
         "orderReference": "SUBSCRIPTION-9321",
         "maxAgeMinutes": 60
@@ -403,138 +189,199 @@ curl -s https://tu-api.example.com/v1/payments/verify \
 {
   "verified": true,
   "status": "VERIFIED",
-  "paymentCode": "PAY-82919381",
-  "expectedAmount": "25",
-  "receivedAmount": "25",
+  "paymentCode": "P_A99TESTPAYX71116",
+  "expectedAmount": "98.814",
+  "receivedAmount": "98.814",
   "asset": "USDT",
-  "receivedAt": "2026-10-01T20:15:31Z",
+  "receivedAt": "2026-09-19T01:16:42Z",
   "orderReference": "SUBSCRIPTION-9321",
   "retryable": false
 }
 ```
 
-Repetir con la misma `orderReference` devuelve `VERIFIED` con `"idempotent": true`.
-Otra orden (`SUBSCRIPTION-9999`) recibe `ALREADY_CLAIMED`.
+Repetir con la misma `orderReference` devuelve `VERIFIED` con `"idempotent": true`; otra
+orden recibe `ALREADY_CLAIMED`. Solo se buscan pagos **de la cuenta de Binance del cliente
+que llama**.
 
-Reglas de la petición: `expectedAmount` debe ser un **string decimal** (`"25.50"`); los
-floats JSON se rechazan (422). `asset` por defecto `USDT`. `maxAgeMinutes` por defecto
-`DEFAULT_PAYMENT_MAX_AGE_MINUTES` y nunca mayor que `MAX_PAYMENT_AGE_MINUTES`. Longitudes
-máximas: código y `orderReference` 128 caracteres; cuerpo 16 KB.
+Cómo se obtiene la evidencia: el worker importa cada 15 s las transferencias **entrantes**
+(`C2C`, monto positivo) de cada cliente desde `GET /sapi/v1/pay/transactions`, y si un ID
+aún no está, `/verify` consulta Binance en ese momento. Un intervalo mínimo por cliente
+(`BINANCE_API_MIN_INTERVAL_SECONDS`, guardado en la base de datos) evita superar el límite
+de peso de Binance aunque haya muchas peticiones o réplicas.
+
+Reglas de la petición: `expectedAmount` como **string decimal** (los floats JSON se
+rechazan), `asset` por defecto `USDT`, `maxAgeMinutes` ≤ `MAX_PAYMENT_AGE_MINUTES`.
 
 Todas las verificaciones procesadas responden **HTTP 200** con `verified`, `status` y
 `retryable`:
 
 | status | Significado | retryable |
 |---|---|---|
-| `VERIFIED` | Pago de confianza, código/monto/asset exactos, reciente, reclamado para esta orden | – |
-| `NOT_FOUND` | No existe un pago con exactamente ese código (tras sincronizar on-demand) | sí |
-| `PENDING_SYNC` | Otra réplica está sincronizando el buzón | sí |
+| `VERIFIED` | Pago entrante, código/monto/asset exactos, reciente, reclamado para esta orden | – |
+| `NOT_FOUND` | No hay un pago entrante con exactamente ese ID en tu cuenta (tras consultar Binance) | sí |
+| `PENDING_SYNC` | Otra réplica está consultando Binance para tu cuenta | sí |
 | `AMOUNT_MISMATCH` | El monto recibido no es igual (comparación `Decimal`) | no |
 | `ASSET_MISMATCH` | El asset no coincide (p. ej. USDC vs USDT) | no |
-| `UNTRUSTED_EMAIL` | Solo hay evidencia que no pasó remitente/DKIM/SPF/DMARC | no |
 | `EXPIRED_PAYMENT` | Más antiguo que `maxAgeMinutes` (o fecha en el futuro) | no |
 | `ALREADY_CLAIMED` | El pago ya fue usado por otra orden | no |
-| `INVALID_PAYMENT_CODE` | Formato de código inválido | no |
-| `MAIL_PROVIDER_UNAVAILABLE` | Gmail/IMAP caído, timeout o error de autenticación | sí |
-| `PAYMENT_NOT_COMPLETED` | *(extensión)* Notificación con estado pendiente/fallido/reembolsado | sí |
-| `AMBIGUOUS_PAYMENT` | *(extensión)* Evidencias de confianza contradictorias para el mismo código → revisión manual | no |
+| `INVALID_PAYMENT_CODE` | Formato de ID inválido | no |
+| `BINANCE_API_UNAVAILABLE` | Binance caído, límite de peso o tu key fue revocada | sí |
+| `BINANCE_NOT_CONFIGURED` | No has registrado tu API key de Binance | no |
+| `AMBIGUOUS_PAYMENT` | Evidencias contradictorias para el mismo ID → revisión manual | no |
+| `PAYMENT_NOT_COMPLETED` / `UNTRUSTED_EVIDENCE` | Reservados para fuentes futuras (Merchant API) | – |
 
-Otros códigos HTTP: `401` API key ausente/incorrecta, `413` cuerpo demasiado grande,
-`422` validación, `429` rate limit (con `Retry-After`).
+Otros códigos HTTP: `401` token ausente, inválido, revocado, caducado o cliente desactivado;
+`413` cuerpo demasiado grande; `422` validación (nunca devuelve los valores enviados);
+`429` rate limit por token (con `Retry-After`).
 
-Endpoints administrativos (requieren `ADMIN_API_KEYS`):
+`PAYMENT_CODE_CASE_INSENSITIVE=true` (recomendado): los IDs de Binance Pay son siempre
+mayúsculas, así que se acepta el ID escrito en minúsculas. La comparación sigue siendo del
+ID completo y exacto. Decide este valor antes de importar pagos y no lo cambies después.
+
+## Supabase (almacenamiento)
+
+Solo hacen falta **dos variables**:
 
 ```bash
-curl -s -X POST -H "Authorization: Bearer $ADMIN_KEY" https://…/v1/admin/mail/test
-# {"connected": true, "provider": "gmail", "account": "tu*******@gmail.com", "authType": "app_password", "error": null}
-
-curl -s -X POST -H "Authorization: Bearer $ADMIN_KEY" https://…/v1/admin/mail/sync
-# {"messagesScanned": 12, "binanceMessages": 2, "paymentsImported": 1, "duplicates": 1, …}
+# Supabase → Project Settings → Database → Connection string → "Transaction pooler"
+# (puerto 6543). Usa el pooler: la conexión directa es solo IPv6.
+DATABASE_URL="postgresql://postgres.<project-ref>:[YOUR-PASSWORD]@aws-0-<region>.pooler.supabase.com:6543/postgres"
+DB_POOL_MAX=5
 ```
 
-Ninguno lista mensajes ni devuelve contenido de emails o credenciales.
+* Pega la URL tal cual y sustituye `[YOUR-PASSWORD]` por la contraseña de la base de datos
+  (sin corchetes). Si se queda el placeholder, la app arranca con un error claro.
+* La contraseña puede tener caracteres especiales (`@ # / ? :`) sin codificarlos. Si ya la
+  tienes URL-codificada (`%40`…) también funciona; si contiene un `%` literal seguido de dos
+  dígitos hexadecimales, escríbelo como `%25`.
+* `DB_POOL_MAX`: conexiones máximas por proceso (la API y el worker cuentan por separado).
+  Con el pooler de transacción, 5 es suficiente.
+* Migraciones: `alembic upgrade head` con la misma `DATABASE_URL` (en Docker Compose lo hace
+  el servicio `migrate`).
+
+Lo que la app ajusta sola al ver el pooler de transacción de Supabase (puerto 6543):
+
+* **TLS obligatorio** (`sslmode=require`).
+* **Sin prepared statements ni opciones de arranque**, que Supavisor no soporta en este modo.
+* **Locks entre réplicas ligados a la transacción** (`pg_try_advisory_xact_lock`), porque en
+  este modo cada transacción puede ir por una conexión distinta. Las garantías anti-replay
+  (`SELECT … FOR UPDATE` + `UNIQUE` dentro de una transacción) no cambian.
+* **Tablas cerradas a la Data API de Supabase:** todas tienen **Row Level Security** sin
+  políticas y sin privilegios para `anon`/`authenticated`. Ni con la *anon key* se pueden
+  leer pagos, tokens o credenciales cifradas vía REST/GraphQL. El backend conecta como
+  `postgres` (propietario), por lo que no le afecta.
+* No uses la *service_role key* ni el cliente HTTP de Supabase: el backend habla PostgreSQL
+  directamente (transacciones y locks).
+
+Opcionales avanzados (normalmente no hacen falta): `DATABASE_SSL_MODE` (p. ej. `verify-full`
+con `?sslrootcert=/ruta/ca.crt` en la URL) y `DATABASE_POOLER_MODE` (`session`/`transaction`,
+autodetectado por el puerto). También funcionan el *Session pooler* (puerto 5432) y cualquier
+PostgreSQL 14+.
+
+## Arquitectura
+
+```
+POST /v1/payments/verify  (token bpv_… → cliente)
+        │
+        ▼
+PaymentVerifier ──────────► PaymentEvidenceProvider (Protocol)
+  │ formato / asset / monto       └── BinancePayHistoryProvider
+  │ antigüedad / estado                 1. busca el ID en PostgreSQL (solo ese cliente)
+  │                                     2. si no está → consulta Binance con SU key
+  ▼                                     3. vuelve a buscar
+PaymentClaimService ── transacción: SELECT … FOR UPDATE + UNIQUE(payment_id)
+
+Worker ── por cada cliente con key: GET /sapi/v1/pay/transactions (cursor + solape)
+          → payments (tenant_id, transactionId)
+```
+
+| Responsabilidad | Módulo |
+|---|---|
+| Clientes y tokens | `app/services/tenants.py`, `app/api/routes/admin.py`, `app/cli.py` |
+| Credenciales Binance cifradas | `app/services/binance_credentials.py`, `app/api/routes/me.py` |
+| Cliente API Binance (firma, permisos, historial) | `app/integrations/binance/account_api.py` |
+| Sincronización + proveedor de evidencias | `app/services/binance_api_sync.py`, `app/workers/sync_worker.py` |
+| Verificación / claim | `app/services/payment_verifier.py`, `app/services/payment_claim.py` |
+| Cifrado / seguridad / logs | `app/core/` |
+| Modelos / migraciones | `app/db/`, `alembic/versions/` |
+| Binance Pay Merchant API (preparada, no activa) | `app/integrations/binance/pay_api.py` |
+
+## Variables de entorno
+
+Todas en [`.env.example`](.env.example). Las esenciales:
+
+| Variable | Descripción |
+|---|---|
+| `DATABASE_URL` | Connection string del *Transaction pooler* de Supabase, pegada tal cual |
+| `DB_POOL_MAX` | Conexiones máximas a la base de datos por proceso (5) |
+| `ADMIN_API_KEYS` | Tu clave maestra (≥ 32 caracteres). `python -m app.cli generate-admin-key` |
+| `CREDENTIALS_ENCRYPTION_KEY` | Clave AES-256 para las keys de Binance. `python -m app.cli generate-encryption-key` |
+| `PAYMENT_CODE_CASE_INSENSITIVE` | `true` recomendado (IDs de Binance en mayúsculas) |
+| `BINANCE_API_SYNC_INTERVAL_SECONDS` | Cada cuánto importa el worker (15 s) |
+| `BINANCE_API_MIN_INTERVAL_SECONDS` | Separación mínima entre llamadas a Binance por cliente |
+| `MAX_PAYMENT_AGE_MINUTES` | Máximo permitido para `maxAgeMinutes` |
+| `RATE_LIMIT_*_PER_MINUTE` | Límites por token |
+
+Ya no hay `API_KEYS`, claves de Binance ni configuración de Gmail en el entorno.
+
+## Tests, lint y type checking
+
+Los tests de integración necesitan un PostgreSQL **de pruebas** (su esquema se borra y
+recrea en cada ejecución; **nunca** apuntes a tu proyecto de Supabase real):
+
+```bash
+createdb binance_pay_test
+export TEST_DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/binance_pay_test
+pytest
+ruff check . && ruff format --check .
+mypy app
+```
+
+Binance se simula con varias cuentas falsas: verificación completa, aislamiento entre
+clientes, keys con permisos peligrosos rechazadas, tokens revocados/caducados, secretos que
+nunca aparecen en respuestas, 8 réplicas concurrentes (exactamente 1 `VERIFIED`),
+intervalo mínimo hacia Binance, worker multi-cliente, RLS de Supabase, etc.
 
 ## Anti-replay, idempotencia y concurrencia
 
-* **Claim transaccional:** en una transacción se bloquea la fila del pago
-  (`SELECT … FOR UPDATE`), se comprueba si ya existe claim y se inserta.
-  `payment_claims.payment_id` es **UNIQUE**: aunque el lock se saltara, el segundo INSERT
-  falla y se responde `ALREADY_CLAIMED`. Resultado garantizado: `A → VERIFIED`,
-  `B → ALREADY_CLAIMED`, nunca dos `VERIFIED` (test con 10 réplicas concurrentes).
-* **Idempotencia:** la misma `orderReference` + mismo pago devuelve `VERIFIED`
-  (`idempotent: true`) incluso si el pago ya superó `maxAgeMinutes`. Sin
-  `orderReference` no se puede reconocer al llamante original, así que una segunda
+* **Claim transaccional:** se bloquea la fila del pago (`SELECT … FOR UPDATE`) y
+  `payment_claims.payment_id` es **UNIQUE**. Resultado garantizado: `A → VERIFIED`,
+  `B → ALREADY_CLAIMED`, nunca dos `VERIFIED`.
+* **Idempotencia:** misma `orderReference` + mismo pago → `VERIFIED` con
+  `idempotent: true`, incluso pasado `maxAgeMinutes`. Sin `orderReference`, una segunda
   petición recibe `ALREADY_CLAIMED`.
-* **Deduplicación de evidencia:** `UNIQUE(mail_account_id, uidvalidity, imap_uid)`,
-  `UNIQUE(mail_account_id, message_id)`, `UNIQUE(source, external_id)` en pagos y un índice
-  único parcial que permite **un solo pago de confianza por `payment_code`**. Un segundo
-  email de confianza con el mismo código y mismos datos es un duplicado; con datos
-  distintos (o `PAID` seguido de `REFUNDED`) el pago se marca `ambiguous` y nunca se
-  verifica automáticamente. `PENDING` → `PAID` actualiza el estado.
-* **Múltiples instancias:** sin locks en memoria ni variables globales de negocio. La
-  sincronización usa un advisory lock de PostgreSQL por cuenta; el cursor IMAP avanza en la
-  misma transacción que guarda el mensaje.
+* **Por cliente:** `UNIQUE(tenant_id, source, external_id)` y un único pago de confianza
+  por `(tenant_id, payment_code)`. El mismo ID en dos cuentas distintas no colisiona.
+* **Múltiples instancias:** sin estado en memoria; advisory lock de PostgreSQL por cliente
+  y cursor de sincronización en la base de datos.
 
 ## Seguridad
 
-* **Credenciales cifradas** con AES-256-GCM (`cryptography`), nonce aleatorio, *associated
-  data* que liga cada ciphertext a su cuenta (no se puede copiar a otra fila) e
-  identificador de clave para rotación (`CREDENTIALS_ENCRYPTION_PREVIOUS_KEYS`). La master
-  key solo viene de `CREDENTIALS_ENCRYPTION_KEY`.
-* **Sin secretos en logs, excepciones o respuestas:** `SecretStr` en configuración, filtro
-  de logging que redacta todos los secretos configurados, claves sensibles, tokens Bearer y
-  cadenas XOAUTH2 (también en tracebacks); errores IMAP genéricos y sin encadenar la
-  respuesta del servidor; SQL sin eco y con `hide_parameters`. Si integras Sentry/tracing,
-  aplica el mismo filtro (`app.core.logging.get_redaction_filter`) en `before_send`.
-* **API:** API key Bearer (comparación en tiempo constante; claves admin separadas),
-  rate limiting compartido en PostgreSQL por API key, validación estricta con Pydantic
-  (campos extra prohibidos, longitudes máximas, sin floats para dinero), límite de tamaño
-  de cuerpo, CORS cerrado por defecto, `TrustedHost` opcional, cabeceras de seguridad
-  (CSP, `nosniff`, `X-Frame-Options`, `Referrer-Policy`, `no-store`, HSTS en producción).
-* **IMAP:** TLS ≥ 1.2 con verificación de certificado, timeouts de socket + guarda asyncio,
-  reintentos limitados con backoff solo para errores transitorios (nunca de autenticación),
-  buzón en solo lectura y `BODY.PEEK[]` (no marca como leído), filtros de búsqueda
-  validados contra inyección IMAP.
-* **Parser:** solo tokeniza HTML con la stdlib; nunca ejecuta JavaScript ni carga contenido
-  externo; el contenido de `<script>`/`<style>` se descarta. Ambigüedad = rechazo.
-* **Datos mínimos:** no se guarda el cuerpo del email (solo hash SHA-256 y metadatos).
-  `STORE_RAW_EMAILS=true` guarda el raw **cifrado**, y solo de remitentes Binance.
+* **Tokens:** 256 bits aleatorios con prefijo `bpv_`; solo se guarda su SHA-256; se
+  muestran una vez; revocables, con caducidad opcional; desactivar un cliente corta todos
+  sus tokens. La clave maestra se compara en tiempo constante y no sirve como token.
+* **Keys de Binance:** solo lectura verificada contra Binance antes de guardar; cifradas
+  con AES-256-GCM ligadas a cada cliente (un ciphertext copiado a otro cliente no se puede
+  descifrar); nunca se devuelven ni se registran en logs; rotación de la clave de cifrado
+  con `CREDENTIALS_ENCRYPTION_PREVIOUS_KEYS`.
+* **Sin secretos en logs ni respuestas:** filtro de redacción, errores 422 que no repiten
+  los valores enviados, SQL sin parámetros en logs.
+* **API:** rate limiting por token en PostgreSQL, validación estricta (sin floats para
+  dinero, longitudes máximas, campos extra prohibidos), límite de tamaño de cuerpo, CORS
+  cerrado, cabeceras de seguridad, HSTS en producción.
+* **Supabase:** RLS + sin privilegios para la Data API en todas las tablas.
 
-## Binance Pay API (futuro)
+## Riesgos y limitaciones
 
-`PaymentVerifier` depende de `PaymentEvidenceProvider`, no del email. En
-`app/integrations/binance/pay_api.py` están preparados `BinancePayClient` (firma
-HMAC-SHA512 de la API Merchant, consulta de orden), el DTO `BinancePayOrder` (`status`,
-`transactionId`, `merchantTradeNo`, `prepayId`, `currency`, `totalFee`, `transactTime`) y
-`BinancePayApiProvider`, que produce el mismo `PaymentEvidence`
-(`source=BINANCE_PAY_API`). Para activarlo: obtener credenciales Merchant, confirmar el
-contrato contra la documentación oficial, implementar la persistencia en `payments`
-(mismo claim transaccional) y seleccionar el provider en `app/container.py`.
-
-## Riesgos y limitaciones de verificar pagos mediante email
-
-* **El email no es la fuente de verdad de Binance.** Es una notificación; puede retrasarse,
-  no llegar, llegar a spam o a otra etiqueta (configura `GMAIL_MAILBOX` si usas filtros),
-  o cambiar de formato sin aviso (el parser rechazará el email: los pagos quedarán
-  `NOT_FOUND`, nunca verificados por error). Para volumen o importes altos, migra a la API
-  oficial de Binance Pay.
-* **Autenticidad delegada en Gmail:** confiamos en el resultado DKIM/SPF/DMARC que Gmail
-  escribe en `Authentication-Results`. Si alguien obtiene acceso a la cuenta Gmail puede
-  insertar mensajes en el buzón (p. ej. con IMAP APPEND) con cabeceras arbitrarias.
-  Protege la cuenta (2FA, cuenta dedicada solo para esto, sin reenvíos) y revisa los
-  `UNTRUSTED_EMAIL`/`AMBIGUOUS_PAYMENT`.
-* **Reenvíos y listas** rompen SPF/DKIM: no reenvíes las notificaciones; deben llegar
-  directamente de Binance a la cuenta monitorizada.
-* **Código de pago:** su significado (ID de orden, de transacción, nota del pagador…)
-  depende del formato real de Binance; confírmalo con un email real. Si el pagador puede
-  elegir el valor (p. ej. una nota), dos pagos podrían declarar el mismo código: el sistema
-  lo marca como ambiguo, pero diseña tus códigos para ser únicos e impredecibles.
-* **Tiempo:** la antigüedad se calcula con la fecha del email (UTC); un reloj de servidor
-  desajustado afecta a `EXPIRED_PAYMENT` (`PAYMENT_CLOCK_SKEW_SECONDS`).
-* **Límites de Gmail:** IMAP tiene cuotas de ancho de banda y conexiones; la sincronización
-  incremental y el intervalo mínimo on-demand (`MAIL_ON_DEMAND_MIN_INTERVAL_SECONDS`)
-  lo mitigan, pero un abuso de códigos inexistentes provoca conexiones extra (de ahí el
-  rate limiting por API key).
-* **Privacidad:** se accede a un buzón real. Usa una cuenta dedicada, `GMAIL_MAILBOX` con
-  una etiqueta exclusiva para Binance y mantén `STORE_RAW_EMAILS=false`.
-* **OAuth en modo Testing** caduca refresh tokens a los 7 días (ver sección OAuth2).
+* Valida con un pago real que el ID que ve el **pagador** en su comprobante de Binance Pay
+  es el mismo `transactionId` que devuelve la API.
+* Se depende de `GET /sapi/v1/pay/transactions` (peso 3000, máximo 100 resultados por
+  llamada, ventanas de 90 días, 18 meses de historial). Si Binance la cambia o limita, las
+  verificaciones devolverán `BINANCE_API_UNAVAILABLE` (nunca un falso `VERIFIED`).
+* Si un cliente restringe su key por IP y el servidor cambia de IP, sus verificaciones
+  fallarán hasta que actualice la lista blanca en Binance.
+* Quien tenga la clave maestra puede crear clientes y tokens: trátala como la contraseña
+  más importante del sistema. Quien tenga `CREDENTIALS_ENCRYPTION_KEY` y acceso a la base
+  de datos puede leer las keys de Binance (de solo lectura).
+* Para volumen alto o integración comercial, la opción oficial es Binance Pay Merchant
+  (estructura preparada en `app/integrations/binance/pay_api.py`).

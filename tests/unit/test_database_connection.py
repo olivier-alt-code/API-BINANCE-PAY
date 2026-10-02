@@ -59,3 +59,44 @@ def test_settings_expose_resolved_database_and_redact_password() -> None:
     s = make_settings(database_url=SecretStr(TRANSACTION))
     assert s.database.transaction_pooler
     assert "s3cr3t-pass" in s.secret_values()
+
+
+SUPABASE_TX = (
+    "postgresql://postgres.abcdefghijklmnopqrst:{pw}"
+    "@aws-0-us-east-2.pooler.supabase.com:6543/postgres"
+)
+
+
+@pytest.mark.parametrize(
+    "password", ["simple", "p@ss", "with#hash", "sl/ash", "q?mark", "co:lon", "pct%", "a@b#c/d?e"]
+)
+def test_raw_passwords_with_special_characters_are_accepted(password: str) -> None:
+    db = resolve_database(SUPABASE_TX.format(pw=password))
+    assert db.url.password == password
+    assert db.url.host == "aws-0-us-east-2.pooler.supabase.com" and db.url.port == 6543
+    assert db.url.username == "postgres.abcdefghijklmnopqrst"
+    assert db.transaction_pooler and db.url.query["sslmode"] == "require"
+
+
+def test_url_encoded_password_and_surrounding_quotes() -> None:
+    db = resolve_database('"' + SUPABASE_TX.format(pw="p%40ss") + '"')
+    assert db.url.password == "p@ss"
+
+
+@pytest.mark.parametrize("placeholder", ["[YOUR-PASSWORD]", "<db-password>"])
+def test_unreplaced_password_placeholder_is_rejected(placeholder: str) -> None:
+    with pytest.raises(ConfigurationError, match="placeholder"):
+        resolve_database(SUPABASE_TX.format(pw=placeholder))
+
+
+def test_db_pool_max_setting() -> None:
+    s = make_settings(db_pool_max=5)
+    assert s.db_pool_max == 5
+    with pytest.raises(ValueError):
+        make_settings(db_pool_max=1)
+
+
+def test_db_password_with_special_chars_is_redacted_from_logs() -> None:
+    s = make_settings(database_url=SecretStr(SUPABASE_TX.format(pw="s3cr3t@pass#word")))
+    assert "s3cr3t@pass#word" in s.secret_values()
+    assert "s3cr3t%40pass%23word" in s.secret_values()

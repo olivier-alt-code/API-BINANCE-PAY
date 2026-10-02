@@ -7,7 +7,6 @@ rendered by ``repr()``/``str()`` and therefore never leak into logs or traceback
 
 from __future__ import annotations
 
-import re
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from functools import lru_cache
@@ -19,21 +18,11 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 if TYPE_CHECKING:
     from app.db.connection import DatabaseConnection
 
-_APP_PASSWORD_RE = re.compile(r"^[a-z]{16}$")
-
 
 class Environment(StrEnum):
     DEVELOPMENT = "development"
     TEST = "test"
     PRODUCTION = "production"
-
-
-class GmailAuthMethod(StrEnum):
-    APP_PASSWORD = "app_password"  # noqa: S105 - enum label, not a secret
-    OAUTH2 = "oauth2"
-    # Normal Google account password. Implemented but DISABLED unless
-    # GMAIL_ACCOUNT_PASSWORD_AUTH_ENABLED=true. Never recommended.
-    ACCOUNT_PASSWORD = "account_password"  # noqa: S105 - enum label, not a secret
 
 
 def _split_csv(value: object) -> object:
@@ -68,8 +57,9 @@ class Settings(BaseSettings):
     database_url: SecretStr = SecretStr(
         "postgresql+psycopg://postgres:postgres@localhost:5432/binance_pay"
     )
-    database_pool_size: int = Field(default=10, ge=1, le=100)
-    database_max_overflow: int = Field(default=10, ge=0, le=100)
+    # Max DB connections per process (API or worker). With Supabase's transaction pooler
+    # a small number is enough: connections are multiplexed by Supavisor.
+    db_pool_max: int = Field(default=5, ge=2, le=100)
     database_pool_timeout_seconds: float = Field(default=10, gt=0)
     database_statement_timeout_ms: int = Field(default=15_000, ge=1_000)
     # Supabase: TLS is required automatically; pooler mode is auto-detected (port 6543 =
@@ -78,13 +68,16 @@ class Settings(BaseSettings):
     database_pooler_mode: Literal["session", "transaction"] | None = None
 
     # --- API security ----------------------------------------------------------------
-    api_keys: Annotated[list[SecretStr], NoDecode] = Field(default_factory=list)
+    # Owner master key(s) for /v1/admin/* (manage clients and their access tokens).
+    # Clients authenticate with per-client tokens stored (hashed) in the database.
     admin_api_keys: Annotated[list[SecretStr], NoDecode] = Field(default_factory=list)
+    token_last_used_update_seconds: int = Field(default=60, ge=0)
     cors_allowed_origins: CsvList = Field(default_factory=list)
     allowed_hosts: CsvList = Field(default_factory=list)
     max_request_body_bytes: int = Field(default=16 * 1024, ge=1024)
     rate_limit_verify_per_minute: int = Field(default=60, ge=1)
-    rate_limit_admin_per_minute: int = Field(default=10, ge=1)
+    rate_limit_admin_per_minute: int = Field(default=30, ge=1)
+    rate_limit_credentials_per_minute: int = Field(default=5, ge=1)
     trust_forwarded_headers: bool = False
 
     # --- Encryption ------------------------------------------------------------------
@@ -93,47 +86,24 @@ class Settings(BaseSettings):
         default_factory=list
     )
 
-    # --- Gmail -----------------------------------------------------------------------
-    gmail_email: str | None = None
-    gmail_auth_method: GmailAuthMethod = GmailAuthMethod.APP_PASSWORD
-    gmail_app_password: SecretStr | None = None
-    gmail_account_password_auth_enabled: bool = False
-    gmail_account_password: SecretStr | None = None
-    gmail_oauth_refresh_token: SecretStr | None = None
-    gmail_imap_host: str = "imap.gmail.com"
-    gmail_imap_port: int = 993
-    gmail_mailbox: str = "INBOX"
-
-    google_client_id: str | None = None
-    google_client_secret: SecretStr | None = None
-    google_redirect_uri: str | None = None
-    google_oauth_state_ttl_seconds: int = Field(default=600, ge=60, le=3600)
-
-    # --- Mail sync -------------------------------------------------------------------
-    mail_initial_lookback_hours: int = Field(default=48, ge=1, le=24 * 30)
-    mail_sync_interval_seconds: int = Field(default=15, ge=5)
-    mail_sync_max_messages_per_run: int = Field(default=200, ge=1, le=5000)
-    mail_imap_timeout_seconds: float = Field(default=15, gt=0, le=120)
-    mail_imap_max_retries: int = Field(default=2, ge=0, le=5)
-    mail_imap_retry_backoff_seconds: float = Field(default=1.0, ge=0)
-    mail_on_demand_sync_enabled: bool = True
-    mail_on_demand_min_interval_seconds: float = Field(default=3, ge=0)
-    mail_sync_lock_wait_seconds: float = Field(default=10, ge=0, le=60)
-    store_raw_emails: bool = False
+    # --- Sync worker -------------------------------------------------------------------
+    sync_lock_wait_seconds: float = Field(default=10, ge=0, le=60)
     # Run the periodic sync loop inside the API process (otherwise run the worker process).
     run_sync_worker_in_api: bool = False
 
-    # --- Binance email identification & trust ----------------------------------------
-    binance_allowed_senders: CsvList = Field(default_factory=list)
-    binance_allowed_domains: CsvList = Field(default_factory=list)
-    binance_allow_simulated_templates: bool | None = None  # default: not in production
-    binance_enabled_templates: CsvList = Field(default_factory=list)  # empty = all
-    email_trusted_authserv_ids: CsvList = Field(default_factory=lambda: ["mx.google.com"])
-    email_require_authentication_results: bool = True
-    email_require_dkim: bool = True
-    email_require_spf: bool = True
-    email_require_dmarc: bool = True
-    email_require_dkim_alignment: bool = True
+    # --- Binance account API (Pay trade history) ---------------------------------------
+    # Each client registers its own read-only Binance API key through
+    # PUT /v1/me/binance-credentials; keys are stored encrypted, never in the environment.
+    binance_api_base_url: str = "https://api.binance.com"
+    binance_api_timeout_seconds: float = Field(default=10, gt=0, le=60)
+    binance_api_recv_window_ms: int = Field(default=10_000, ge=1_000, le=60_000)
+    binance_api_max_retries: int = Field(default=2, ge=0, le=5)
+    # The endpoint weighs 3000 (UID): keep syncs spaced out across ALL replicas.
+    binance_api_sync_interval_seconds: int = Field(default=15, ge=5)
+    binance_api_min_interval_seconds: float = Field(default=5, ge=1)
+    binance_api_initial_lookback_hours: int = Field(default=48, ge=1, le=24 * 89)
+    binance_api_overlap_seconds: int = Field(default=300, ge=0, le=3600)
+    binance_pay_order_types: CsvList = Field(default_factory=lambda: ["C2C"])
 
     # --- Payment verification --------------------------------------------------------
     default_asset: str = "USDT"
@@ -148,71 +118,33 @@ class Settings(BaseSettings):
     @field_validator(
         "cors_allowed_origins",
         "allowed_hosts",
-        "binance_allowed_senders",
-        "binance_allowed_domains",
-        "binance_enabled_templates",
-        "email_trusted_authserv_ids",
+        "binance_pay_order_types",
         mode="before",
     )
     @classmethod
     def _csv(cls, value: object) -> object:
         return _split_csv(value)
 
-    @field_validator(
-        "api_keys", "admin_api_keys", "credentials_encryption_previous_keys", mode="before"
-    )
+    @field_validator("admin_api_keys", "credentials_encryption_previous_keys", mode="before")
     @classmethod
     def _csv_secrets(cls, value: object) -> object:
         if isinstance(value, SecretStr):
             value = value.get_secret_value()
         return _split_csv(value)
 
-    @field_validator("binance_allowed_senders", "binance_allowed_domains")
-    @classmethod
-    def _lower(cls, value: list[str]) -> list[str]:
-        return [v.strip().lower() for v in value]
-
     @field_validator("default_asset")
     @classmethod
     def _upper_asset(cls, value: str) -> str:
         return value.strip().upper()
 
-    @field_validator("gmail_email")
-    @classmethod
-    def _normalize_email(cls, value: str | None) -> str | None:
-        if value is None or not value.strip():
-            return None
-        return value.strip().lower()
-
     @model_validator(mode="after")
     def _validate(self) -> Self:
-        for key in [*self.api_keys, *self.admin_api_keys]:
+        for key in self.admin_api_keys:
             if len(key.get_secret_value()) < 32:
-                raise ValueError("API keys must be at least 32 characters long")
+                raise ValueError("ADMIN_API_KEYS must be at least 32 characters long")
 
         if self.max_payment_age_minutes < self.default_payment_max_age_minutes:
             raise ValueError("MAX_PAYMENT_AGE_MINUTES must be >= DEFAULT_PAYMENT_MAX_AGE_MINUTES")
-
-        if (
-            self.gmail_auth_method is GmailAuthMethod.ACCOUNT_PASSWORD
-            and self.gmail_email
-            and not self.gmail_account_password_auth_enabled
-        ):
-            raise ValueError(
-                "GMAIL_AUTH_METHOD=account_password is disabled. Use an App Password "
-                "or OAuth2. Never provide your normal Google password."
-            )
-
-        if self.gmail_app_password is not None:
-            normalized = self.gmail_app_password.get_secret_value().replace(" ", "")
-            if not _APP_PASSWORD_RE.fullmatch(normalized):
-                # Google App Passwords are always 16 lowercase letters. Anything else is
-                # most likely the normal account password, which we refuse to accept.
-                raise ValueError(
-                    "GMAIL_APP_PASSWORD does not look like a Google App Password "
-                    "(16 letters). Do not use your normal Google password."
-                )
-            self.gmail_app_password = SecretStr(normalized)
 
         try:
             tolerance = Decimal(self.payment_amount_tolerance)
@@ -232,14 +164,8 @@ class Settings(BaseSettings):
         return self.enable_docs if self.enable_docs is not None else not self.is_production
 
     @property
-    def simulated_templates_allowed(self) -> bool:
-        if self.binance_allow_simulated_templates is not None:
-            return self.binance_allow_simulated_templates
-        return not self.is_production
-
-    @property
-    def binance_senders_configured(self) -> bool:
-        return bool(self.binance_allowed_senders or self.binance_allowed_domains)
+    def encryption_configured(self) -> bool:
+        return self.credentials_encryption_key is not None
 
     @property
     def database(self) -> DatabaseConnection:
@@ -262,20 +188,22 @@ class Settings(BaseSettings):
         candidates: list[SecretStr | None] = [
             self.database_url,
             self.credentials_encryption_key,
-            self.gmail_app_password,
-            self.gmail_account_password,
-            self.gmail_oauth_refresh_token,
-            self.google_client_secret,
-            *self.api_keys,
             *self.admin_api_keys,
             *self.credentials_encryption_previous_keys,
         ]
         values = [c.get_secret_value() for c in candidates if c is not None]
-        # Also redact the DB password alone if present in the URL.
-        url = self.database_url.get_secret_value()
-        match = re.search(r"://[^:/@]+:([^@]+)@", url)
-        if match:
-            values.append(match.group(1))
+        # Also redact the DB password alone (raw and URL-encoded forms), parsed with the
+        # same tolerant parser used to connect (passwords may contain "@", "#", "/"...).
+        from urllib.parse import quote  # noqa: PLC0415
+
+        from app.db.connection import normalize_url  # noqa: PLC0415 - avoid import cycle
+
+        try:
+            password = normalize_url(self.database_url.get_secret_value()).password
+        except Exception:
+            password = None
+        if password:
+            values += [password, quote(password, safe="")]
         return [v for v in values if len(v) >= 6]
 
 
