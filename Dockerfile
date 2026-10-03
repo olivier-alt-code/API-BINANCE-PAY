@@ -22,6 +22,7 @@ COPY --from=builder /opt/venv /opt/venv
 COPY --chown=app:app app ./app
 COPY --chown=app:app alembic ./alembic
 COPY --chown=app:app alembic.ini ./
+COPY --chown=app:app --chmod=755 docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
 # Stateless: nothing is written to the filesystem at runtime (read-only rootfs friendly).
 USER app
@@ -31,5 +32,8 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).status == 200 else 1)"
 
 # TLS is expected to be terminated by a reverse proxy / load balancer in production.
+# Trusted proxy IPs come from FORWARDED_ALLOW_IPS (read by uvicorn; "*" on Azure App Service).
+ENV FORWARDED_ALLOW_IPS=127.0.0.1
+ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["uvicorn", "--factory", "app.main:app_factory", "--host", "0.0.0.0", "--port", "8000", \
-     "--no-access-log", "--proxy-headers", "--forwarded-allow-ips", "127.0.0.1", "--no-server-header"]
+     "--no-access-log", "--proxy-headers", "--no-server-header"]
