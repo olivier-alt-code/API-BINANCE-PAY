@@ -14,12 +14,12 @@ jobs:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: binance_pay_test
-        ports: ["5432:5432"]
+        ports: ["6543:5432"]  # local test DB, published on 6543 like the Supabase pooler
         options: >-
           --health-cmd "pg_isready -U postgres" --health-interval 5s
           --health-timeout 3s --health-retries 10
     env:
-      TEST_DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/binance_pay_test
+      TEST_DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:6543/binance_pay_test
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -31,5 +31,5 @@ jobs:
       - run: pytest
       - name: Migrations are in sync with the models
         env:
-          DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/binance_pay_test
+          DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:6543/binance_pay_test
         run: alembic upgrade head && alembic check

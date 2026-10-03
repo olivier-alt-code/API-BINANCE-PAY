@@ -100,6 +100,9 @@ En producción: `APP_ENV=production` (HSTS activado y `/docs` desactivado salvo
 > 📘 **Guía completa de los endpoints de administración** (todos los campos, respuestas,
 > errores y ejemplos para PowerShell y curl): [`docs/admin-api.md`](docs/admin-api.md).
 
+**Despliegue en Azure App Service (plan B2)** con GitHub Actions y perfil de publicación:
+[`docs/deploy-azure.md`](docs/deploy-azure.md).
+
 Puedes hacerlo por **HTTP** (con tu clave maestra) o con la **CLI** del servidor. Cada
 token se muestra **una única vez**: cópialo y envíaselo a esa persona por un canal privado.
 
