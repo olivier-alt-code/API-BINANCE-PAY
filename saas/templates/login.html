@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Entrar · {{ settings.site_name }}{% endblock %}
+{% block content %}
+<section class="narrow">
+  <h1>Entrar</h1>
+  <p class="muted">Accede con el token de API que recibiste al suscribirte.</p>
+  {% if error %}<div class="notice error">{{ error }}</div>{% endif %}
+  <form method="post" action="/entrar" class="card stack">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label>Token
+      <input type="password" name="token" required maxlength="100" autocomplete="off"
+             placeholder="bpv_…">
+    </label>
+    <button type="submit" class="primary">Entrar</button>
+  </form>
+  <p class="muted small">¿Perdiste el token? Abre el enlace de pago de tu compra y usa
+    «¿Perdiste tu token?» con tu ID de orden{% if settings.support_contact %}, o escribe a
+    {{ settings.support_contact }}{% endif %}.</p>
+</section>
+{% endblock %}

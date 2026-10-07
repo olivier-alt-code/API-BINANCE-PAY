@@ -1,0 +1,65 @@
+[project]
+name = "binance-pay-saas"
+version = "0.1.0"
+description = "Web storefront that sells monthly access to the Binance Pay verification API, paid in USDT via Binance Pay."
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi>=0.118,<1.0",
+    "uvicorn[standard]>=0.37",
+    "pydantic>=2.12,<3",
+    "pydantic-settings>=2.11,<3",
+    "sqlalchemy[asyncio]>=2.0.43,<2.2",
+    "psycopg[binary]>=3.2.10,<4",
+    "httpx>=0.28,<1",
+    "jinja2>=3.1,<4",
+    "python-multipart>=0.0.20",
+    "itsdangerous>=2.2,<3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.4",
+    "pytest-asyncio>=1.2",
+    "aiosqlite>=0.21",
+    "ruff>=0.13",
+    "mypy>=1.18",
+]
+
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["saas*"]
+
+[tool.setuptools.package-data]
+saas = ["templates/*.html", "static/*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "ASYNC", "RUF", "SIM", "PL", "N"]
+ignore = [
+    "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR2004",
+    "RUF001", "RUF002", "RUF003",  # Spanish text
+    "B008",     # FastAPI Depends()/Form() in defaults
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S105", "S106", "PLC0415"]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+plugins = ["pydantic.mypy"]
+exclude = ["tests/"]
+warn_unused_ignores = true

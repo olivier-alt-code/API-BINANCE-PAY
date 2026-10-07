@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% block title %}Documentación · {{ settings.site_name }}{% endblock %}
+{% block content %}
+{% set api = settings.docs_api_url %}
+<section class="doc">
+  <h1>Documentación de la API</h1>
+  <p class="lead">Base URL: <code>{{ api }}</code>. Todas las llamadas llevan tu token en la
+    cabecera <code>Authorization: Bearer bpv_…</code>. Úsalo solo desde tu servidor.</p>
+
+  <h2>1. Conecta tu Binance (una sola vez)</h2>
+  <p>En Binance crea una API key con <strong>solo «Enable Reading»</strong> (sin trading,
+    retiros ni transferencias; si la restringes por IP, añade la IP del servidor de la API).
+    Regístrala desde <a href="/cuenta">Mi cuenta</a> o con la API:</p>
+  <pre><code>curl -X PUT {{ api }}/v1/me/binance-credentials \
+  -H "Authorization: Bearer bpv_TU_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"apiKey": "TU_API_KEY", "apiSecret": "TU_SECRET"}'</code></pre>
+  <p>Responde <code>200</code> si se aceptó, o <code>422</code> con el motivo si la key no es de
+    solo lectura o no puede leer tu historial de Binance Pay.</p>
+
+  <h2>2. Verifica un pago</h2>
+  <p>Tu cliente te paga por Binance Pay y te da el <strong>ID de orden</strong> que le muestra
+    Binance. Tu servidor lo verifica:</p>
+  <pre><code>curl -X POST {{ api }}/v1/payments/verify \
+  -H "Authorization: Bearer bpv_TU_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"paymentCode": "457883830937640960",
+       "expectedAmount": "4.99",
+       "asset": "USDT",
+       "orderReference": "pedido-123"}'</code></pre>
+  <table>
+    <thead><tr><th>Campo</th><th>Descripción</th></tr></thead>
+    <tbody>
+      <tr><td><code>paymentCode</code></td><td>ID de orden de Binance Pay. Se compara exacto.</td></tr>
+      <tr><td><code>expectedAmount</code></td><td>Importe esperado <strong>como texto</strong> (<code>"4.99"</code>), nunca como número decimal.</td></tr>
+      <tr><td><code>asset</code></td><td>Moneda, por defecto <code>USDT</code>.</td></tr>
+      <tr><td><code>orderReference</code></td><td>Id del pedido en tu sistema. Reintentar con el mismo es seguro (respuesta idempotente).</td></tr>
+      <tr><td><code>maxAgeMinutes</code></td><td>Opcional: antigüedad máxima aceptada del pago.</td></tr>
+    </tbody>
+  </table>
+  <p>Respuesta:</p>
+  <pre><code>{
+  "verified": true,
+  "status": "VERIFIED",
+  "paymentCode": "457883830937640960",
+  "expectedAmount": "4.99",
+  "receivedAmount": "4.99",
+  "asset": "USDT",
+  "receivedAt": "2026-10-07T12:00:00Z",
+  "orderReference": "pedido-123",
+  "retryable": false
+}</code></pre>
+
+  <h2>3. Cómo decidir</h2>
+  <ul>
+    <li><code>verified: true</code> → entrega el producto.</li>
+    <li><code>retryable: true</code> → reintenta en 5–10 segundos (un pago recién hecho tarda unos segundos en aparecer).</li>
+    <li>Cualquier otro caso → rechaza y muestra el motivo.</li>
+  </ul>
+  <table>
+    <thead><tr><th>status</th><th>Significado</th></tr></thead>
+    <tbody>
+      <tr><td><code>VERIFIED</code></td><td>Pago correcto y reservado para ese pedido.</td></tr>
+      <tr><td><code>NOT_FOUND</code></td><td>Aún no aparece, o el ID no existe / es demasiado antiguo.</td></tr>
+      <tr><td><code>AMOUNT_MISMATCH</code></td><td>El importe no coincide (ver <code>receivedAmount</code>).</td></tr>
+      <tr><td><code>ASSET_MISMATCH</code></td><td>Se pagó en otra moneda.</td></tr>
+      <tr><td><code>ALREADY_CLAIMED</code></td><td>Ese pago ya se usó en otro pedido.</td></tr>
+      <tr><td><code>EXPIRED_PAYMENT</code></td><td>El pago es más antiguo de lo permitido.</td></tr>
+      <tr><td><code>PENDING_SYNC</code> / <code>BINANCE_API_UNAVAILABLE</code></td><td>Temporal: reintenta.</td></tr>
+      <tr><td><code>BINANCE_NOT_CONFIGURED</code></td><td>Falta registrar tu API key de Binance.</td></tr>
+    </tbody>
+  </table>
+  <p>Errores HTTP: <code>401</code> token inválido o suscripción vencida · <code>422</code>
+    datos inválidos · <code>429</code> demasiadas peticiones.</p>
+
+  <h2>Ejemplo en Python</h2>
+  <pre><code>import httpx
+
+r = httpx.post(
+    "{{ api }}/v1/payments/verify",
+    headers={"Authorization": "Bearer bpv_TU_TOKEN"},
+    json={"paymentCode": order_id, "expectedAmount": "4.99",
+          "asset": "USDT", "orderReference": pedido_id},
+    timeout=60,
+)
+data = r.json()
+if data["verified"]:
+    activar_plan(pedido_id)
+elif data["retryable"]:
+    reintentar_mas_tarde()
+else:
+    rechazar(data["status"])</code></pre>
+
+  <h2>Otros endpoints</h2>
+  <ul>
+    <li><code>GET /v1/me</code> — quién eres (comprobar el token).</li>
+    <li><code>GET /v1/me/binance-credentials</code> — estado de tu API key de Binance.</li>
+    <li><code>DELETE /v1/me/binance-credentials</code> — borrar tu API key.</li>
+    <li><code>POST /v1/me/binance/sync</code> — importar ahora tus últimos pagos recibidos.</li>
+  </ul>
+</section>
+{% endblock %}

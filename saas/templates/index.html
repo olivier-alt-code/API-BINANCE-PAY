@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="hero">
+  <h1>Verifica pagos de Binance Pay con una sola llamada a la API</h1>
+  <p class="lead">Tu cliente te paga por Binance Pay, te da el <strong>ID de orden</strong> y
+    tu sistema lo confirma al instante: importe exacto, moneda, antigüedad y protección
+    contra reutilizar el mismo pago.</p>
+</section>
+
+<section class="grid">
+  <div class="card">
+    <h3>Sin comisiones de pasarela</h3>
+    <p>Cobras directamente en tu cuenta de Binance. Nosotros solo leemos tu historial con una
+      API key de <strong>solo lectura</strong> que nunca puede mover fondos.</p>
+  </div>
+  <div class="card">
+    <h3>Anti-fraude incluido</h3>
+    <p>Cada pago se puede usar una sola vez, se compara el importe al céntimo y se rechazan
+      pagos antiguos o en otra moneda.</p>
+  </div>
+  <div class="card">
+    <h3>Integración en minutos</h3>
+    <p>Un endpoint HTTP con tu token privado. Funciona con cualquier lenguaje: PHP, Node,
+      Python, bots de Telegram…</p>
+  </div>
+</section>
+
+<section class="pricing" id="suscribirse">
+  <div class="card plan">
+    <h2>Plan mensual</h2>
+    <p class="price"><span>{{ settings.price_usdt | usdt }}</span> USDT <small>/ {{ settings.period_days }} días</small></p>
+    <ul class="checks">
+      <li>Token privado de acceso a la API</li>
+      <li>Verificación por ID de orden de Binance Pay</li>
+      <li>Panel para renovar, cambiar el token y conectar tu Binance</li>
+      <li>Sin permanencia: si no renuevas, el acceso se pausa</li>
+    </ul>
+    {% if error %}<div class="notice error">{{ error }}</div>{% endif %}
+    <form method="post" action="/suscribirse" class="stack">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <label>Tu email
+        <input type="email" name="email" required maxlength="254" autocomplete="email"
+               value="{{ email or '' }}" placeholder="tu@email.com">
+      </label>
+      <label class="check"><input type="checkbox" name="accept" value="1" required>
+        Entiendo que el pago se hace en USDT por Binance Pay y que el acceso dura
+        {{ settings.period_days }} días por pago.</label>
+      <button type="submit" class="primary">Suscribirme por {{ settings.price_usdt | usdt }} USDT</button>
+    </form>
+    <p class="muted small">¿Ya eres cliente? <a href="/entrar">Entra con tu token</a> para renovar.</p>
+  </div>
+  <div class="card how">
+    <h2>Cómo funciona</h2>
+    <ol>
+      <li>Escribe tu email y pulsa suscribirme.</li>
+      <li>Envía {{ settings.price_usdt | usdt }} USDT por Binance Pay a la cuenta indicada.</li>
+      <li>Pega el <strong>ID de orden</strong> que te muestra Binance tras pagar.</li>
+      <li>Recibe tu token al instante y conecta tu API key de Binance de solo lectura.</li>
+    </ol>
+  </div>
+</section>
+{% endblock %}

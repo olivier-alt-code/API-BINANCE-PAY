@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}Mi cuenta · {{ settings.site_name }}{% endblock %}
+{% block content %}
+<section class="narrow">
+  <h1>Mi cuenta</h1>
+  {% if error %}<div class="notice error">{{ error }}</div>{% endif %}
+
+  <div class="card">
+    <div class="status-row">
+      <div>
+        <p class="muted small">Suscripción</p>
+        {% if active %}<span class="badge ok">Activa</span>
+        {% elif expired %}<span class="badge error">Vencida</span>
+        {% else %}<span class="badge">Pendiente de pago</span>{% endif %}
+      </div>
+      <div>
+        <p class="muted small">{% if expired %}Venció el{% else %}Válida hasta{% endif %}</p>
+        <strong>{{ sub.paid_until | date }}</strong>
+        {% if active %}<p class="muted small">{{ days_left }} día{{ '' if days_left == 1 else 's' }} restantes</p>{% endif %}
+      </div>
+      <div>
+        <p class="muted small">Token</p>
+        <code>{{ sub.token_prefix or '—' }}…</code>
+      </div>
+    </div>
+    {% if expired %}<p>Tu token está pausado: las llamadas a la API responden 401 hasta que renueves.</p>{% endif %}
+    <form method="post" action="/cuenta/renovar" class="inline">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button type="submit" class="primary">Renovar {{ settings.period_days }} días por {{ settings.price_usdt | usdt }} USDT</button>
+    </form>
+    <p class="muted small">Si renuevas antes de que venza, los días se suman a los que te quedan.</p>
+  </div>
+
+  <div class="card">
+    <h3>Conectar tu Binance</h3>
+    <p>Registra una API key de Binance con <strong>solo «Enable Reading»</strong>: la API la
+      usa para leer tu historial de Binance Pay. Se guarda cifrada y nunca puede mover fondos.</p>
+    {% if binance_ok %}<div class="notice ok">{{ binance_ok }}</div>{% endif %}
+    {% if binance_error %}<div class="notice error">{{ binance_error }}</div>{% endif %}
+    <form method="post" action="/cuenta/binance" class="stack">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <label>Tu token de esta API
+        <input type="password" name="token" required maxlength="100" autocomplete="off" placeholder="bpv_…">
+      </label>
+      <label>API key de Binance
+        <input name="api_key" required maxlength="128" autocomplete="off">
+      </label>
+      <label>Secret key de Binance
+        <input type="password" name="api_secret" required maxlength="128" autocomplete="off">
+      </label>
+      <button type="submit">Registrar key</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <h3>Cambiar token</h3>
+    <p>Genera un token nuevo si crees que el tuyo se filtró. <strong>El actual dejará de
+      funcionar al instante</strong> y tendrás que actualizarlo en tus sistemas.</p>
+    <form method="post" action="/cuenta/token" class="inline" data-confirm="¿Seguro? El token actual dejará de funcionar.">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button type="submit" class="danger">Generar token nuevo</button>
+    </form>
+  </div>
+</section>
+{% endblock %}

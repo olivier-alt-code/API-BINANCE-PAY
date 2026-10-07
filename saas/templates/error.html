@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}Error · {{ settings.site_name }}{% endblock %}
+{% block content %}
+<section class="narrow">
+  <h1>{{ code }}</h1>
+  <div class="notice error">{{ message }}</div>
+  <p><a class="button" href="/">Volver al inicio</a></p>
+</section>
+{% endblock %}

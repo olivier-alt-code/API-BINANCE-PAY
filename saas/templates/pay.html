@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}Pago · {{ settings.site_name }}{% endblock %}
+{% block content %}
+{% set renewal = checkout.kind == "renewal" %}
+<section class="narrow">
+  <h1>{% if renewal %}Renovar suscripción{% else %}Completa tu suscripción{% endif %}</h1>
+  <p class="muted">Cuenta: {{ sub.email }}</p>
+
+  {% if checkout.status == "fulfilled" %}
+    <div class="notice ok">Este pago ya se procesó correctamente.
+      {% if sub.paid_until %}Tu suscripción está activa hasta el {{ sub.paid_until | date }}.{% endif %}
+    </div>
+    <p><a class="button" href="/cuenta">Ir a mi cuenta</a></p>
+
+    <div class="card">
+      <h3>¿Perdiste tu token?</h3>
+      <p>Escribe el ID de orden con el que pagaste este pedido y te generamos uno nuevo.
+        <strong>El token anterior dejará de funcionar.</strong></p>
+      {% if recover_error %}<div class="notice error">{{ recover_error }}</div>{% endif %}
+      <form method="post" action="/pago/{{ checkout.access_key }}/recuperar" class="stack">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <label>ID de orden
+          <input name="order_id" required maxlength="64" inputmode="numeric" autocomplete="off">
+        </label>
+        <button type="submit">Generar token nuevo</button>
+      </form>
+    </div>
+  {% else %}
+    <div class="card steps">
+      <div class="step">
+        <span class="num">1</span>
+        <div>
+          <h3>Envía exactamente <span class="amount">{{ checkout.amount | usdt }} USDT</span></h3>
+          <p>En la app de Binance: <em>Pagar → Enviar</em> (Binance Pay), moneda <strong>USDT</strong>.</p>
+          <dl class="payto">
+            <dt>Binance Pay ID</dt>
+            <dd><code id="payto">{{ settings.pay_to_id }}</code>
+              <button type="button" class="copy small" data-copy="payto">Copiar</button></dd>
+            {% if settings.pay_to_name %}<dt>Destinatario</dt><dd>{{ settings.pay_to_name }}</dd>{% endif %}
+          </dl>
+          {% if settings.pay_qr_url %}
+            <img class="qr" src="{{ settings.pay_qr_url }}" alt="Código QR de Binance Pay" width="200" height="200">
+          {% endif %}
+        </div>
+      </div>
+      <div class="step">
+        <span class="num">2</span>
+        <div>
+          <h3>Pega el ID de orden</h3>
+          <p>Al terminar, Binance muestra <em>«Pago exitoso»</em> con un <strong>ID de orden</strong>
+            (un número largo). Cópialo aquí.</p>
+          {% if error %}<div class="notice {{ 'warn' if waiting else 'error' }}">{{ error }}</div>{% endif %}
+          <form method="post" action="/pago/{{ checkout.access_key }}" class="stack">
+            <input type="hidden" name="csrf" value="{{ csrf }}">
+            <label>ID de orden
+              <input name="order_id" required maxlength="64" inputmode="numeric"
+                     autocomplete="off" value="{{ order_id or checkout.payment_code or '' }}"
+                     placeholder="457883830937640960">
+            </label>
+            <button type="submit" class="primary">Verificar pago</button>
+          </form>
+        </div>
+      </div>
+    </div>
+    <p class="muted small">Guarda esta página en marcadores hasta terminar: con este enlace y tu
+      ID de orden puedes completar el pedido o recuperar el token más tarde. No lo compartas.</p>
+  {% endif %}
+</section>
+{% endblock %}

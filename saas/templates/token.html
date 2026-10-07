@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Tu token · {{ settings.site_name }}{% endblock %}
+{% block content %}
+<section class="narrow">
+  <h1>¡Listo! Este es tu token</h1>
+  <div class="notice warn"><strong>Cópialo ahora y guárdalo en un lugar seguro.</strong>
+    Por seguridad no lo guardamos: no se volverá a mostrar.</div>
+  <div class="token-box">
+    <code id="token">{{ token.token }}</code>
+    <button type="button" class="copy primary" data-copy="token">Copiar</button>
+  </div>
+  <p class="muted">Cuenta {{ email }}{% if paid_until %} · activa hasta el {{ paid_until | date }}{% endif %}</p>
+
+  <div class="card">
+    <h3>Siguientes pasos</h3>
+    <ol>
+      <li>Crea en Binance una API key con <strong>solo «Enable Reading»</strong>.</li>
+      <li>Regístrala en <a href="/cuenta">Mi cuenta</a> (o con la API, ver la
+        <a href="/documentacion">documentación</a>).</li>
+      <li>Verifica pagos con <code>POST /v1/payments/verify</code> usando este token.</li>
+    </ol>
+    <p>Usa el token solo desde tu servidor, nunca dentro de una app o web pública.</p>
+  </div>
+  <p><a class="button" href="/cuenta">Ir a mi cuenta</a></p>
+</section>
+{% endblock %}
