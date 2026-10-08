@@ -48,13 +48,13 @@
 <section class="list">
   {% for n in notes %}{{ note_item(n, here) }}
   {% else %}
-    <p class="empty">{% if q or tag %}Nada coincide con el filtro.{% elif view == 'pendientes' %}Sin pendientes. 🎉{% else %}Todavía no hay nada aquí.{% endif %}</p>
+    <p class="empty big-empty">{{ icon('search' if q or tag else 'checks') }}{% if q or tag %}Nada coincide con el filtro.{% elif view == 'pendientes' %}Sin pendientes.{% else %}Todavía no hay nada aquí.{% endif %}</p>
   {% endfor %}
 </section>
 
 {% if project %}
 <details class="card danger-zone">
-  <summary>Editar proyecto</summary>
+  <summary>{{ icon('edit') }} Editar proyecto</summary>
   <form method="post" action="{{ url_for('notes.update_project', project_id=project.id) }}" class="stack">
     {{ csrf() }}
     <label>Nombre <input name="name" value="{{ project.name }}" required maxlength="80"></label>
@@ -62,7 +62,7 @@
     <fieldset class="colors"><legend>Color</legend>
       {% for c in colors %}<label class="swatch c{{ loop.index0 }}"><input type="radio" name="color" value="{{ c }}" {{ 'checked' if c == project.color }}><span></span></label>{% endfor %}
     </fieldset>
-    <label class="toggle"><input type="checkbox" name="archived" value="1" {{ 'checked' if project.archived }}> Archivado (se oculta de la lista)</label>
+    <label class="switch"><input type="checkbox" name="archived" value="1" {{ 'checked' if project.archived }}><span class="track"></span> Archivado (se oculta de la lista)</label>
     <button type="submit">Guardar proyecto</button>
   </form>
   <form method="post" action="{{ url_for('notes.delete_project', project_id=project.id) }}" class="stack delete">

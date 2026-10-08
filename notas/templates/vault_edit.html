@@ -3,7 +3,7 @@
 {% block title %}Editar · {{ entry.name }}{% endblock %}
 {% block content %}
 <header class="page-head">
-  <p class="crumbs"><a href="{{ url_for('vault.index') }}">← Contraseñas</a></p>
+  <p class="crumbs"><a href="{{ url_for('vault.index') }}">{{ icon('arrow-left') }} Contraseñas</a></p>
   <h1>{{ entry.name }}</h1>
 </header>
 <form method="post" action="{{ url_for('vault.update', entry_id=entry.id) }}" class="card stack">
@@ -11,6 +11,6 @@
   <button type="submit" class="primary">Guardar</button>
 </form>
 <form method="post" action="{{ url_for('vault.delete', entry_id=entry.id) }}" class="right" data-confirm="¿Borrar «{{ entry.name }}»?">
-  {{ csrf() }}<button type="submit" class="danger">Borrar</button>
+  {{ csrf() }}<button type="submit" class="danger">{{ icon('trash') }} Borrar</button>
 </form>
 {% endblock %}

@@ -19,7 +19,7 @@
     </a>
   {% endfor %}
   <details class="project-card new">
-    <summary>＋ Nuevo proyecto</summary>
+    <summary>{{ icon('plus') }} Nuevo proyecto</summary>
     <form method="post" action="{{ url_for('notes.create_project') }}" class="stack">
       {{ csrf() }}
       <input name="name" placeholder="Nombre" required maxlength="80">

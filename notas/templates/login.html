@@ -4,7 +4,8 @@
 {% block content %}
 <form method="post" class="card auth stack">
   {{ csrf() }}<input type="hidden" name="next" value="{{ next }}">
-  <h1>▦ Mis notas</h1>
+  <span class="auth-logo">{{ icon('logo') }}</span>
+  <h1>Mis notas</h1>
   {% if error %}<div class="flash error">{{ error }}</div>{% endif %}
   <label>Contraseña maestra <input type="password" name="password" required autofocus autocomplete="current-password"></label>
   <button type="submit" class="primary">Entrar</button>

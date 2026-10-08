@@ -7,7 +7,7 @@
 </header>
 
 <details class="card" {{ 'open' if not entries and not q }}>
-  <summary><strong>＋ Nueva contraseña</strong></summary>
+  <summary><strong>{{ icon('plus') }} Nueva contraseña</strong></summary>
   <form method="post" action="{{ url_for('vault.create') }}" class="stack">
     {% with entry=None %}{% include "_vault_form.html" %}{% endwith %}
     <button type="submit" class="primary">Guardar</button>
@@ -18,20 +18,21 @@
   {% for e in entries %}
   <article class="card vault-item">
     <div class="vault-name">
+      <span class="avatar">{{ e.name[:1] | upper }}</span>
       <strong>{{ e.name }}</strong>
       {% if e.url %}<a class="small muted" href="{{ e.url }}" target="_blank" rel="noopener noreferrer">{{ e.url | replace('https://', '') | replace('http://', '') }}</a>{% endif %}
     </div>
     <div class="vault-fields">
       {% if e.username %}
       <span class="field"><span class="muted small">Usuario</span> <code>{{ e.username }}</code>
-        <button type="button" class="small" data-copy-value="{{ e.username }}">Copiar</button></span>
+        <button type="button" class="small" data-copy-value="{{ e.username }}" title="Copiar usuario">{{ icon('copy') }}</button></span>
       {% endif %}
       <span class="field"><span class="muted small">Clave</span> <code class="secret" data-secret="{{ e.password }}">••••••••</code>
-        <button type="button" class="small" data-reveal>Ver</button>
-        <button type="button" class="small primary" data-copy-value="{{ e.password }}">Copiar</button></span>
+        <button type="button" class="small" data-reveal title="Ver">{{ icon('eye') }}</button>
+        <button type="button" class="small primary" data-copy-value="{{ e.password }}">{{ icon('copy') }} Copiar</button></span>
     </div>
     {% if e.notes %}<p class="small muted pre">{{ e.notes }}</p>{% endif %}
-    <a class="small" href="{{ url_for('vault.edit', entry_id=e.id) }}">Editar</a>
+    <a class="small edit-link" href="{{ url_for('vault.edit', entry_id=e.id) }}">{{ icon('edit') }} Editar</a>
   </article>
   {% else %}
     <p class="empty">{{ 'Nada coincide.' if q else 'Todavía no guardaste ninguna.' }}</p>

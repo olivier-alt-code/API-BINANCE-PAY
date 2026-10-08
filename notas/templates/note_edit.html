@@ -5,7 +5,7 @@
 {% set home = url_for('notes.project', project_id=note.project_id) if note.project_id else url_for('notes.rutina') %}
 {% set next = request.args.get('next') or home %}
 <header class="page-head">
-  <p class="crumbs"><a href="{{ next }}">← Volver</a></p>
+  <p class="crumbs"><a href="{{ next }}">{{ icon('arrow-left') }} Volver</a></p>
   <h1>Editar {{ 'pendiente' if note.is_task else 'nota' }}</h1>
   <p class="muted small">Creada {{ note.created_at | replace('T', ' ') }} · editada {{ note.updated_at | replace('T', ' ') }}</p>
 </header>
@@ -23,14 +23,14 @@
     </label>
   </div>
   <div class="quick-row">
-    <label class="toggle"><input type="checkbox" name="is_task" value="1" {{ 'checked' if note.is_task }}> Es un pendiente</label>
-    <label class="inline-field">Fecha <input type="date" name="due_date" value="{{ note.due_date or '' }}"></label>
-    <label class="toggle"><input type="checkbox" name="pinned" value="1" {{ 'checked' if note.pinned }}> Fijada arriba</label>
-    <button type="submit" class="primary">Guardar <kbd>Ctrl+↵</kbd></button>
+    <label class="switch"><input type="checkbox" name="is_task" value="1" {{ 'checked' if note.is_task }}><span class="track"></span> Es un pendiente</label>
+    <label class="date-field">{{ icon('calendar') }}<input type="date" name="due_date" value="{{ note.due_date or '' }}" aria-label="Fecha"></label>
+    <label class="switch"><input type="checkbox" name="pinned" value="1" {{ 'checked' if note.pinned }}><span class="track"></span> Fijada arriba</label>
+    <button type="submit" class="primary">{{ icon('check') }} Guardar <kbd>Ctrl ↵</kbd></button>
   </div>
 </form>
 <form method="post" action="{{ url_for('notes.delete_note', note_id=note.id) }}" class="right" data-confirm="¿Borrar esta nota?">
   {{ csrf() }}<input type="hidden" name="next" value="{{ next if not next.startswith('/notas/') else home }}">
-  <button type="submit" class="danger">Borrar</button>
+  <button type="submit" class="danger">{{ icon('trash') }} Borrar</button>
 </form>
 {% endblock %}

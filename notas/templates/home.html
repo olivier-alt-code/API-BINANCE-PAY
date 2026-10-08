@@ -2,7 +2,8 @@
 {% from "_macros.html" import note_item, quick_add %}
 {% block content %}
 <header class="page-head">
-  <h1>Hola 👋</h1>
+  <p class="eyebrow">{{ today_label }}</p>
+  <h1>{{ greeting }}</h1>
   <p class="muted">Captura rápido; ordénalo después.</p>
 </header>
 
@@ -11,27 +12,27 @@
 <div class="dash">
   <section class="card">
     <div class="card-head">
-      <h2>Pendientes {% if overdue %}<span class="due overdue">{{ overdue }} vencido{{ 's' if overdue != 1 }}</span>{% endif %}</h2>
-      <a href="{{ url_for('notes.rutina', vista='pendientes') }}">Ver todos →</a>
+      <h2>{{ icon('checks') }} Pendientes {% if overdue %}<span class="due overdue">{{ overdue }} vencido{{ 's' if overdue != 1 }}</span>{% endif %}</h2>
+      <a href="{{ url_for('notes.rutina', vista='pendientes') }}">Ver todos {{ icon('arrow-right') }}</a>
     </div>
     {% for n in upcoming %}{{ note_item(n, url_for('home.index'), show_project=True) }}
-    {% else %}<p class="empty">Nada pendiente. 🎉</p>{% endfor %}
+    {% else %}<p class="empty">{{ icon('check') }} Nada pendiente.</p>{% endfor %}
   </section>
 
   <section class="card">
-    <div class="card-head"><h2>Rutina · notas recientes</h2><a href="{{ url_for('notes.rutina', vista='notas') }}">Ver →</a></div>
+    <div class="card-head"><h2>{{ icon('clock') }} Rutina · recientes</h2><a href="{{ url_for('notes.rutina', vista='notas') }}">Ver {{ icon('arrow-right') }}</a></div>
     {% for n in rutina %}{{ note_item(n, url_for('home.index')) }}
     {% else %}<p class="empty">Aún no hay notas de rutina.</p>{% endfor %}
   </section>
 
   <section class="card">
-    <div class="card-head"><h2>Proyectos · recientes</h2><a href="{{ url_for('notes.projects') }}">Ver →</a></div>
+    <div class="card-head"><h2>{{ icon('folder') }} Proyectos · recientes</h2><a href="{{ url_for('notes.projects') }}">Ver {{ icon('arrow-right') }}</a></div>
     {% for n in proyectos %}{{ note_item(n, url_for('home.index'), show_project=True) }}
     {% else %}<p class="empty">Crea un proyecto para empezar a anotar.</p>{% endfor %}
   </section>
 
   <section class="card">
-    <div class="card-head"><h2>Planes activos</h2><a href="{{ url_for('plans.index') }}">Ver →</a></div>
+    <div class="card-head"><h2>{{ icon('calendar') }} Planes activos</h2><a href="{{ url_for('plans.index') }}">Ver {{ icon('arrow-right') }}</a></div>
     {% for p in plans %}
       <a class="plan-row" href="{{ url_for('plans.detail', plan_id=p.id) }}">
         <span class="plan-title">{{ p.title }}</span>
@@ -42,7 +43,7 @@
   </section>
 
   <section class="card">
-    <div class="card-head"><h2>Dinero</h2><a href="{{ url_for('money.index') }}">Ver →</a></div>
+    <div class="card-head"><h2>{{ icon('wallet') }} Dinero</h2><a href="{{ url_for('money.index') }}">Ver {{ icon('arrow-right') }}</a></div>
     {% if money.accounts %}
       <p class="big">{{ fmt_money(money.usdt_total, 'USDT') }}
         {% if money.ves_total is not none %}<span class="muted small">≈ {{ fmt_money(money.ves_total, 'VES') }}</span>{% endif %}</p>
@@ -52,7 +53,7 @@
   </section>
 
   <section class="card compact">
-    <div class="card-head"><h2>Contraseñas</h2><a href="{{ url_for('vault.index') }}">Abrir →</a></div>
+    <div class="card-head"><h2>{{ icon('key') }} Contraseñas</h2><a href="{{ url_for('vault.index') }}">Abrir {{ icon('arrow-right') }}</a></div>
     <p class="muted">{{ vault_count }} guardada{{ 's' if vault_count != 1 }}, cifradas con tu contraseña maestra.</p>
   </section>
 </div>

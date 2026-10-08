@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from flask import Blueprint, render_template, request
 
 from notas.db import get_db, today
@@ -26,8 +28,32 @@ def index() -> str:
     overdue = db.execute(
         "SELECT COUNT(*) FROM notes WHERE is_task = 1 AND done = 0 AND due_date < ?", (today(),)
     ).fetchone()[0]
+    now = datetime.now()
+    greeting = (
+        "Buenos días"
+        if 5 <= now.hour < 12
+        else ("Buenas tardes" if now.hour < 19 else "Buenas noches")
+    )
+    days = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
+    months = [
+        "enero",
+        "febrero",
+        "marzo",
+        "abril",
+        "mayo",
+        "junio",
+        "julio",
+        "agosto",
+        "septiembre",
+        "octubre",
+        "noviembre",
+        "diciembre",
+    ]
+    today_label = f"{days[now.weekday()]} {now.day} de {months[now.month - 1]}"
     return render_template(
         "home.html",
+        greeting=greeting,
+        today_label=today_label,
         upcoming=upcoming,
         overdue=overdue,
         rutina=query_notes(section="rutina", view="notas", limit=5),

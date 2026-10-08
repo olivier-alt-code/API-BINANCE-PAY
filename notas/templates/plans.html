@@ -9,12 +9,12 @@
 
 {% if not archived %}
 <details class="card" {{ 'open' if not plans }}>
-  <summary><strong>＋ Nuevo plan</strong></summary>
+  <summary><strong>{{ icon('plus') }} Nuevo plan</strong></summary>
   <form method="post" action="{{ url_for('plans.create') }}" class="stack">
     {{ csrf() }}
     <div class="grid2">
       <input name="title" placeholder="Título del plan" required maxlength="150">
-      <label class="inline-field">Fecha objetivo <input type="date" name="target_date"></label>
+      <label class="date-field" title="Fecha objetivo">{{ icon('calendar') }}<input type="date" name="target_date" aria-label="Fecha objetivo"></label>
     </div>
     <textarea name="description" rows="2" placeholder="Objetivo o contexto (opcional)"></textarea>
     <textarea name="steps" rows="4" placeholder="Pasos, uno por línea (puedes añadir más después)"></textarea>

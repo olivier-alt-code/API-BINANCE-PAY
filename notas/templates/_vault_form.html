@@ -7,8 +7,8 @@
 <label>Contraseña
   <span class="pw-field">
     <input type="password" name="password" id="pw-input" value="{{ entry.password if entry else '' }}" required maxlength="500" autocomplete="new-password">
-    <button type="button" class="small" data-toggle-password="pw-input">Ver</button>
-    <button type="button" class="small" data-generate="pw-input">Generar</button>
+    <button type="button" class="small" data-toggle-password="pw-input">{{ icon('eye') }} Ver</button>
+    <button type="button" class="small" data-generate="pw-input">{{ icon('dice') }} Generar</button>
   </span>
 </label>
 <label>Web <input name="url" value="{{ entry.url if entry else '' }}" maxlength="500" placeholder="ejemplo.com"></label>

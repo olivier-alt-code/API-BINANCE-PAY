@@ -11,6 +11,7 @@ from typing import Any
 from flask import Flask, jsonify, render_template, request, send_from_directory
 
 from notas import db
+from notas.icons import icon
 from notas.security import check_csrf, csrf_token, is_logged_in
 from notas.security import is_logged_in as _logged
 
@@ -80,6 +81,7 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
 
     app.jinja_env.globals.update(
         csrf_token=csrf_token,
+        icon=icon,
         due_label=due_label,
         color_class=color_class,
         fmt_money=money.fmt,

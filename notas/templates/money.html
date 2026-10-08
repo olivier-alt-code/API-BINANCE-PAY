@@ -28,7 +28,7 @@
 {% if s.accounts %}
 <section class="balances">
   <div class="balance total">
-    <span class="muted small">Total</span>
+    <span class="muted small">{{ icon('wallet') }} Total</span>
     <strong>{{ fmt(s.usdt_total, 'USDT') }}</strong>
     <span class="muted small">{% if s.ves_total is not none %}≈ {{ fmt(s.ves_total, 'VES') }}{% else %}Pon la tasa para sumar los Bs{% endif %}</span>
   </div>
@@ -56,12 +56,12 @@
     <datalist id="money-categories">{% for c in categories %}<option value="{{ c }}">{% endfor %}</datalist>
     <input name="description" placeholder="Descripción (opcional)" maxlength="200">
     <input type="date" name="date" value="{{ today }}" aria-label="Fecha">
-    <button type="submit" class="primary">Registrar</button>
+    <button type="submit" class="primary">{{ icon('plus') }} Registrar</button>
   </form>
 </section>
 
 <details class="card">
-  <summary><strong>⇄ Cambio o transferencia entre cuentas</strong> <span class="muted small">(vender USDT, comprar USDT, mover dinero)</span></summary>
+  <summary><strong>{{ icon('swap') }} Cambio o transferencia entre cuentas</strong> <span class="muted small">(vender USDT, comprar USDT, mover dinero)</span></summary>
   <form method="post" action="{{ url_for('money.create_exchange') }}" class="stack">
     {{ csrf() }}
     <div class="grid2">
@@ -71,7 +71,7 @@
       <label>Monto que entra <input name="amount_in" inputmode="decimal" autocomplete="off" placeholder="igual si es la misma moneda"></label>
     </div>
     <div class="quick-row">
-      <label class="toggle"><input type="checkbox" name="update_rate" value="1" checked> Usar la tasa de este cambio como tasa actual</label>
+      <label class="switch"><input type="checkbox" name="update_rate" value="1" checked><span class="track"></span> Usar la tasa de este cambio como tasa actual</label>
       <input type="date" name="date" value="{{ today }}" aria-label="Fecha">
       <button type="submit" class="primary">Registrar cambio</button>
     </div>
@@ -122,22 +122,22 @@
     </div>
     <form method="post" action="{{ url_for('money.delete_movement', movement_id=m.id) }}" data-confirm="¿Borrar este movimiento?{{ ' (se borran las dos partes del cambio)' if m.exchange_id }}">
       {{ csrf() }}<input type="hidden" name="next" value="{{ here }}">
-      <button class="icon" title="Borrar" aria-label="Borrar">✕</button>
+      <button class="icon" title="Borrar" aria-label="Borrar">{{ icon('x') }}</button>
     </form>
   </article>
   {% else %}<p class="empty">No hay movimientos con este filtro.</p>{% endfor %}
 </section>
 
 <details class="card">
-  <summary><strong>Cuentas</strong></summary>
+  <summary><strong>{{ icon('wallet') }} Cuentas</strong></summary>
   {% for a in all_accounts %}
   <form method="post" action="{{ url_for('money.update_account', account_id=a.id) }}" class="account-row">
     {{ csrf() }}
     <input name="name" value="{{ a.name }}" aria-label="Nombre" maxlength="60">
     <span class="chip">{{ 'Bs' if a.currency == 'VES' else 'USDT' }}</span>
     <label class="inline-field small">Saldo inicial <input name="initial" inputmode="decimal" value="{{ fmt(a.initial | abs) }}"></label>
-    <label class="toggle small"><input type="checkbox" name="initial_negative" value="1" {{ 'checked' if a.initial < 0 }}> negativo</label>
-    <label class="toggle small"><input type="checkbox" name="archived" value="1" {{ 'checked' if a.archived }}> archivada</label>
+    <label class="switch small"><input type="checkbox" name="initial_negative" value="1" {{ 'checked' if a.initial < 0 }}><span class="track"></span> negativo</label>
+    <label class="switch small"><input type="checkbox" name="archived" value="1" {{ 'checked' if a.archived }}><span class="track"></span> archivada</label>
     <button type="submit" class="small">Guardar</button>
   </form>
   {% endfor %}

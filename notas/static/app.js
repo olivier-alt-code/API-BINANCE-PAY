@@ -19,9 +19,12 @@
   });
 
   const flashButton = (btn, label) => {
-    const old = btn.textContent;
+    if (btn.dataset.busy) return;
+    btn.dataset.busy = "1";
+    const old = btn.innerHTML;
+    btn.classList.add("copied");
     btn.textContent = label;
-    setTimeout(() => { btn.textContent = old; }, 1200);
+    setTimeout(() => { btn.innerHTML = old; btn.classList.remove("copied"); delete btn.dataset.busy; }, 1200);
   };
 
   document.addEventListener("click", (e) => {
@@ -39,12 +42,13 @@
       const secret = btn.parentElement.querySelector("[data-secret]");
       const shown = secret.textContent === secret.dataset.secret;
       secret.textContent = shown ? "••••••••" : secret.dataset.secret;
-      btn.textContent = shown ? "Ver" : "Ocultar";
+      secret.classList.toggle("shown", !shown);
+      btn.setAttribute("aria-pressed", String(!shown));
     }
     if (btn.dataset.togglePassword) {
       const input = document.getElementById(btn.dataset.togglePassword);
       input.type = input.type === "password" ? "text" : "password";
-      btn.textContent = input.type === "password" ? "Ver" : "Ocultar";
+      btn.setAttribute("aria-pressed", String(input.type === "text"));
     }
     if (btn.dataset.generate) {
       const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%&*-_=+?";
@@ -52,6 +56,8 @@
       const input = document.getElementById(btn.dataset.generate);
       input.value = Array.from(bytes, (b) => chars[b % chars.length]).join("");
       input.type = "text";
+      input.classList.add("flash-in");
+      setTimeout(() => input.classList.remove("flash-in"), 600);
     }
   });
 
