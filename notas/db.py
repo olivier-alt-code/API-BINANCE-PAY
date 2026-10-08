@@ -62,6 +62,32 @@ CREATE TABLE IF NOT EXISTS plan_steps (
 );
 CREATE INDEX IF NOT EXISTS ix_steps_plan ON plan_steps(plan_id, position);
 
+-- Money: accounts in bolívares (VES) or USDT. Amounts are integers in 1/10000 units
+-- (exact sums in SQL), signed: + money in, - money out.
+CREATE TABLE IF NOT EXISTS accounts (
+    id         INTEGER PRIMARY KEY,
+    name       TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    currency   TEXT NOT NULL CHECK (currency IN ('VES', 'USDT')),
+    initial    INTEGER NOT NULL DEFAULT 0,
+    archived   INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS movements (
+    id          INTEGER PRIMARY KEY,
+    account_id  INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    kind        TEXT NOT NULL CHECK (kind IN ('ingreso', 'gasto', 'cambio')),
+    amount      INTEGER NOT NULL,
+    category    TEXT NOT NULL DEFAULT '',
+    description TEXT NOT NULL DEFAULT '',
+    date        TEXT NOT NULL,
+    rate        INTEGER,               -- Bs per USDT (x10000) when it was recorded
+    exchange_id TEXT,                  -- both legs of a currency exchange share it
+    created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_movements_date ON movements(date);
+CREATE INDEX IF NOT EXISTS ix_movements_account ON movements(account_id, date);
+
 -- Password vault: secrets are encrypted with a key derived from the master password.
 CREATE TABLE IF NOT EXISTS vault (
     id         INTEGER PRIMARY KEY,

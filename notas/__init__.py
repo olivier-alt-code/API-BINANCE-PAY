@@ -8,10 +8,11 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
-from flask import Flask, render_template
+from flask import Flask, jsonify, render_template, request, send_from_directory
 
 from notas import db
 from notas.security import check_csrf, csrf_token, is_logged_in
+from notas.security import is_logged_in as _logged
 
 
 def _secret_key(instance: Path) -> str:
@@ -68,9 +69,9 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
     app.teardown_appcontext(db.close_db)
     app.before_request(check_csrf)
 
-    from notas import auth, home, notes, plans, vault
+    from notas import auth, home, money, notes, plans, vault
 
-    for module in (auth, home, notes, plans, vault):
+    for module in (auth, home, money, notes, plans, vault):
         app.register_blueprint(module.bp)
 
     def color_class(value: str | None) -> str:
@@ -78,23 +79,81 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
         return f"c{colors.index(value)}" if value in colors else "c0"
 
     app.jinja_env.globals.update(
-        csrf_token=csrf_token, due_label=due_label, color_class=color_class
+        csrf_token=csrf_token,
+        due_label=due_label,
+        color_class=color_class,
+        fmt_money=money.fmt,
+        month_name=money.month_name,
+        days_ago=money.days_ago,
     )
 
     @app.context_processor
     def _ctx() -> dict[str, Any]:
         return {"logged_in": is_logged_in()}
 
+    static_dir = Path(app.root_path) / "static"
+
+    @app.get("/sw.js")
+    def service_worker():  # type: ignore[no-untyped-def]
+        # Served from the root so it controls the whole app (scope "/").
+        response = send_from_directory(static_dir, "sw.js", mimetype="text/javascript")
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+    @app.get("/manifest.webmanifest")
+    def manifest():  # type: ignore[no-untyped-def]
+        return send_from_directory(
+            static_dir, "manifest.webmanifest", mimetype="application/manifest+json"
+        )
+
+    @app.get("/api/csrf")
+    def api_csrf():  # type: ignore[no-untyped-def]
+        # Used by the offline outbox to replay queued forms with a fresh token.
+        if not _logged():
+            return jsonify(error="login"), 401
+        return jsonify(csrf=csrf_token())
+
+    @app.get("/api/offline-urls")
+    def api_offline_urls():  # type: ignore[no-untyped-def]
+        # Pages the service worker pre-downloads for offline reading (never the vault).
+        if not _logged():
+            return jsonify(error="login"), 401
+        conn = db.get_db()
+        urls = [
+            "/",
+            "/rutina",
+            "/rutina?vista=pendientes",
+            "/rutina?vista=notas",
+            "/rutina?vista=hechas",
+            "/rutina?vista=todo",
+            "/proyectos",
+            "/planes",
+            "/dinero",
+        ]
+        urls += [
+            f"/proyectos/{r[0]}" for r in conn.execute("SELECT id FROM projects WHERE archived = 0")
+        ]
+        urls += [f"/planes/{r[0]}" for r in conn.execute("SELECT id FROM plans WHERE archived = 0")]
+        urls += [
+            f"/notas/{r[0]}"
+            for r in conn.execute("SELECT id FROM notes ORDER BY updated_at DESC LIMIT 80")
+        ]
+        return jsonify(urls=urls)
+
     @app.after_request
     def _headers(response):  # type: ignore[no-untyped-def]
         response.headers.setdefault(
             "Content-Security-Policy",
             "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; "
+            "worker-src 'self'; manifest-src 'self'; connect-src 'self'; "
             "form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
         )
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("Referrer-Policy", "same-origin")
-        response.headers["Cache-Control"] = "no-store"
+        if request.path.startswith("/static/") or request.path == "/sw.js":
+            response.headers["Cache-Control"] = "no-cache"  # revalidate; SW keeps offline copies
+        else:
+            response.headers["Cache-Control"] = "no-store"
         return response
 
     @app.errorhandler(400)

@@ -5,6 +5,7 @@ from __future__ import annotations
 from flask import Blueprint, render_template, request
 
 from notas.db import get_db, today
+from notas.money import summary as money_summary
 from notas.notes import query_notes
 from notas.plans import recent_plans
 from notas.security import login_required
@@ -32,6 +33,7 @@ def index() -> str:
         rutina=query_notes(section="rutina", view="notas", limit=5),
         proyectos=query_notes(section="proyecto", limit=6),
         plans=recent_plans(4),
+        money=money_summary(),
         vault_count=db.execute("SELECT COUNT(*) FROM vault").fetchone()[0],
     )
 

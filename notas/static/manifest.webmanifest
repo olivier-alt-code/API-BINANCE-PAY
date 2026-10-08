@@ -1,0 +1,19 @@
+{
+  "name": "Mis notas",
+  "short_name": "Notas",
+  "description": "Rutina, proyectos, planes, dinero y contraseñas",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f5f6f8",
+  "theme_color": "#4f7cff",
+  "lang": "es",
+  "icons": [
+    { "src": "/static/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Rutina y pendientes", "url": "/rutina" },
+    { "name": "Dinero", "url": "/dinero" },
+    { "name": "Proyectos", "url": "/proyectos" }
+  ]
+}

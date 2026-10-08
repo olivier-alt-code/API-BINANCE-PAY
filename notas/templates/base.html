@@ -2,11 +2,16 @@
 <html lang="es">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#4f7cff">
   <title>{% block title %}Mis notas{% endblock %}</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="{{ url_for('static', filename='icon.svg') }}" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="{{ url_for('static', filename='icon.svg') }}">
+  <meta name="apple-mobile-web-app-capable" content="yes">
 </head>
-<body>
+<body data-logged="{{ 1 if logged_in else 0 }}">
 {% if logged_in %}
 <div class="layout">
   <aside class="sidebar">
@@ -14,17 +19,18 @@
     <form class="search" action="{{ url_for('home.search') }}" method="get">
       <input type="search" name="q" placeholder="Buscar en todo…" value="{{ request.args.get('q', '') if request.endpoint == 'home.search' else '' }}" aria-label="Buscar" data-hotkey="/">
     </form>
-    <nav>
+    <nav class="mainnav" aria-label="Secciones">
       {% set ep = request.endpoint or '' %}
-      <a href="{{ url_for('home.index') }}" class="{{ 'active' if ep == 'home.index' }}"><span>⌂</span> Inicio</a>
-      <a href="{{ url_for('notes.rutina') }}" class="{{ 'active' if ep == 'notes.rutina' }}"><span>☑</span> Rutina y pendientes</a>
-      <a href="{{ url_for('notes.projects') }}" class="{{ 'active' if ep in ('notes.projects', 'notes.project') }}"><span>⚙</span> Proyectos</a>
-      <a href="{{ url_for('plans.index') }}" class="{{ 'active' if ep.startswith('plans.') }}"><span>◷</span> Planificación</a>
-      <a href="{{ url_for('vault.index') }}" class="{{ 'active' if ep.startswith('vault.') }}"><span>⚿</span> Contraseñas</a>
+      <a href="{{ url_for('home.index') }}" class="{{ 'active' if ep == 'home.index' }}"><span class="ico">⌂</span><span>Inicio</span></a>
+      <a href="{{ url_for('notes.rutina') }}" class="{{ 'active' if ep == 'notes.rutina' }}"><span class="ico">☑</span><span class="long">Rutina y pendientes</span><span class="short">Rutina</span></a>
+      <a href="{{ url_for('notes.projects') }}" class="{{ 'active' if ep in ('notes.projects', 'notes.project') }}"><span class="ico">⚙</span><span>Proyectos</span></a>
+      <a href="{{ url_for('plans.index') }}" class="{{ 'active' if ep.startswith('plans.') }}"><span class="ico">◷</span><span class="long">Planificación</span><span class="short">Planes</span></a>
+      <a href="{{ url_for('money.index') }}" class="{{ 'active' if ep.startswith('money.') }}"><span class="ico">$</span><span>Dinero</span></a>
+      <a href="{{ url_for('vault.index') }}" class="{{ 'active' if ep.startswith('vault.') }}"><span class="ico">⚿</span><span class="long">Contraseñas</span><span class="short">Claves</span></a>
     </nav>
     <div class="sidebar-foot">
       <a href="{{ url_for('auth.settings') }}">Ajustes</a>
-      <form method="post" action="{{ url_for('auth.logout') }}">
+      <form method="post" action="{{ url_for('auth.logout') }}" data-logout>
         <input type="hidden" name="csrf" value="{{ csrf_token() }}">
         <button class="link" type="submit">Bloquear</button>
       </form>
@@ -34,12 +40,18 @@
 {% else %}
   <main class="content solo">
 {% endif %}
+    <div id="net-status" class="netbar" hidden></div>
+    <section id="outbox" class="card outbox" hidden>
+      <div class="card-head"><h2>⏳ Pendiente de subir</h2><button type="button" class="small" data-flush>Sincronizar ahora</button></div>
+      <ul id="outbox-list"></ul>
+    </section>
     {% with messages = get_flashed_messages(with_categories=true) %}
       {% for cat, msg in messages %}<div class="flash {{ cat }}">{{ msg }}</div>{% endfor %}
     {% endwith %}
     {% block content %}{% endblock %}
   </main>
 {% if logged_in %}</div>{% endif %}
+<script src="{{ url_for('static', filename='outbox.js') }}" defer></script>
 <script src="{{ url_for('static', filename='app.js') }}" defer></script>
 </body>
 </html>

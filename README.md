@@ -1,12 +1,14 @@
 # Mis notas
 
-App web **personal** (Flask + SQLite) para organizarte. Tiene cuatro secciones:
+App web **personal** (Flask + SQLite) para organizarte. Funciona igual en el móvil, la
+tablet y el PC, y **sigue funcionando sin conexión**. Tiene cinco secciones:
 
 | Sección | Para qué |
 |---|---|
 | **Rutina y pendientes** | Hábitos, horarios, recados y tareas. Notas y pendientes en el mismo sitio, con pestañas (*Pendientes / Notas / Hechas / Todo*), etiquetas, búsqueda y fechas que se marcan como *hoy*, *mañana* o *vencido*. |
 | **Proyectos** | Apuntes de tus proyectos de ingeniería: cálculos, decisiones, ideas, pendientes. Cada proyecto tiene color, contador de pendientes, filtros y etiquetas propias. También puedes ver las últimas notas de todos los proyectos juntas. |
 | **Planificación** | Planes con pasos ordenados (un viaje, una mudanza, un estudio…), barra de progreso, fecha objetivo y "siguiente paso". |
+| **Dinero** | Cuentas en **bolívares y USDT**, gastos e ingresos por categoría, cambios entre monedas (vender o comprar USDT) y una tasa Bs/USDT que tú pones o que se toma del último cambio. Muestra el total en USDT y en Bs, el resumen del mes y los gastos por categoría. |
 | **Contraseñas** | Gestor rápido: buscar, copiar usuario y clave con un clic, ver u ocultar la clave y generar claves seguras. Todo se guarda **cifrado**. |
 
 La **pantalla de inicio** reúne:
@@ -14,7 +16,8 @@ La **pantalla de inicio** reúne:
 - los próximos pendientes, de todas las secciones;
 - las notas recientes de rutina;
 - las notas recientes de proyectos;
-- los planes activos.
+- los planes activos;
+- tu dinero (total y lo gastado este mes).
 
 ## Uso rápido
 
@@ -27,6 +30,26 @@ La **pantalla de inicio** reúne:
 - **Buscar:** el buscador lateral (atajo `/`) busca en todas las notas y planes.
 - **Mover una nota:** al editarla puedes cambiarla de sección, de rutina a un proyecto o
   al revés.
+
+## Sin conexión
+
+Es una PWA: en el móvil o en Chrome/Edge puedes **instalarla** (menú → *Instalar app* o
+*Añadir a pantalla de inicio*) y se abre como una app.
+
+- **Lectura sin conexión:** un *service worker* guarda una copia de las páginas que visitas
+  y, en segundo plano, descarga también las de cada sección, proyecto, plan y las notas
+  recientes. Sin conexión ves la última copia, con un aviso arriba.
+- **Escritura sin conexión:** lo que guardes queda en una **cola** (IndexedDB): notas,
+  pendientes, marcar hecho, pasos de planes, gastos… La verás arriba como *Pendiente de
+  subir*. Al volver la conexión se sube sola, en orden y sin duplicados, gracias a
+  *Background Sync* o al recargar la página. También puedes pulsar *Sincronizar ahora*.
+- **Si la sesión caducó mientras no tenías conexión**, la cola espera a que vuelvas a entrar
+  con tu contraseña y entonces se sube.
+- **Borradores:** lo que escribes en cualquier cuadro de texto se guarda en `localStorage`
+  mientras escribes, así que no lo pierdes al recargar, cerrar o quedarte sin batería.
+- **Contraseñas e inicio de sesión:** nunca se guardan en el dispositivo y necesitan
+  conexión. **Bloquear** borra también las copias de páginas guardadas.
+- **Dónde funciona:** el modo sin conexión necesita HTTPS, o `localhost` / `127.0.0.1`.
 
 ## Instalar y arrancar (Windows / PowerShell)
 

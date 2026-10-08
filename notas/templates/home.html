@@ -41,6 +41,16 @@
     {% else %}<p class="empty">Sin planes todavía.</p>{% endfor %}
   </section>
 
+  <section class="card">
+    <div class="card-head"><h2>Dinero</h2><a href="{{ url_for('money.index') }}">Ver →</a></div>
+    {% if money.accounts %}
+      <p class="big">{{ fmt_money(money.usdt_total, 'USDT') }}
+        {% if money.ves_total is not none %}<span class="muted small">≈ {{ fmt_money(money.ves_total, 'VES') }}</span>{% endif %}</p>
+      <div class="mini-balances">{% for a in money.accounts %}<span><span class="muted small">{{ a.name }}</span> {{ fmt_money(a.balance, a.currency) }}</span>{% endfor %}</div>
+      <p class="muted small">Gastado este mes: ≈ {{ fmt_money(money.spent_usdt, 'USDT') }}{% if money.by_category %} · más en {{ money.by_category[0][0] }}{% endif %}</p>
+    {% else %}<p class="empty">Crea tus cuentas en Bs y USDT.</p>{% endif %}
+  </section>
+
   <section class="card compact">
     <div class="card-head"><h2>Contraseñas</h2><a href="{{ url_for('vault.index') }}">Abrir →</a></div>
     <p class="muted">{{ vault_count }} guardada{{ 's' if vault_count != 1 }}, cifradas con tu contraseña maestra.</p>

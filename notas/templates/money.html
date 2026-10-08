@@ -1,0 +1,152 @@
+{% extends "base.html" %}
+{% from "_macros.html" import csrf %}
+{% block title %}Dinero{% endblock %}
+{% block content %}
+{% set here = request.full_path.rstrip('?') %}
+<header class="page-head row">
+  <div><h1>Dinero</h1><p class="muted">Bolívares y USDT: saldos, gastos e ingresos.</p></div>
+  <form method="post" action="{{ url_for('money.set_rate') }}" class="rate-form">
+    {{ csrf() }}
+    <label class="inline-field">1 USDT =
+      <input name="rate" inputmode="decimal" required placeholder="0,00" value="{{ fmt(s.rate) if s.rate else '' }}" aria-label="Tasa en bolívares por USDT"> Bs</label>
+    <button type="submit" class="small">Guardar tasa</button>
+    {% set age = days_ago(s.rate_date) %}
+    {% if s.rate_date %}<span class="muted small{{ ' stale' if age and age > 1 }}">{{ 'hoy' if age == 0 else ('hace ' ~ age ~ ' día' ~ ('s' if age != 1)) }}</span>{% endif %}
+  </form>
+</header>
+
+{% if not all_accounts %}
+<section class="card stack">
+  <h2>Empieza creando tus cuentas</h2>
+  <p class="muted">Una cuenta es donde tienes el dinero: efectivo, banco, Binance… cada una en Bs o en USDT.</p>
+  <form method="post" action="{{ url_for('money.create_suggested') }}">{{ csrf() }}
+    <button type="submit" class="primary">Crear: {% for n, c in suggested %}{{ n }}{{ ', ' if not loop.last }}{% endfor %}</button>
+  </form>
+</section>
+{% endif %}
+
+{% if s.accounts %}
+<section class="balances">
+  <div class="balance total">
+    <span class="muted small">Total</span>
+    <strong>{{ fmt(s.usdt_total, 'USDT') }}</strong>
+    <span class="muted small">{% if s.ves_total is not none %}≈ {{ fmt(s.ves_total, 'VES') }}{% else %}Pon la tasa para sumar los Bs{% endif %}</span>
+  </div>
+  {% for a in s.accounts %}
+  <div class="balance {{ 'usdt' if a.currency == 'USDT' else 'ves' }}">
+    <span class="muted small">{{ a.name }}</span>
+    <strong class="{{ 'neg' if a.balance < 0 }}">{{ fmt(a.balance, a.currency) }}</strong>
+    {% if a.currency == 'VES' and s.rate %}<span class="muted small">≈ {{ fmt(to_usdt(a.balance, 'VES', s.rate), 'USDT') }}</span>{% endif %}
+  </div>
+  {% endfor %}
+</section>
+
+<section class="card">
+  <form method="post" action="{{ url_for('money.create_movement') }}" class="movement-form">
+    {{ csrf() }}
+    <div class="seg" role="radiogroup" aria-label="Tipo">
+      <label><input type="radio" name="kind" value="gasto" checked><span>− Gasto</span></label>
+      <label><input type="radio" name="kind" value="ingreso"><span>+ Ingreso</span></label>
+    </div>
+    <input name="amount" inputmode="decimal" placeholder="Monto" required autocomplete="off" class="amount-input">
+    <select name="account_id" required aria-label="Cuenta">
+      {% for a in s.accounts %}<option value="{{ a.id }}">{{ a.name }} ({{ 'Bs' if a.currency == 'VES' else 'USDT' }})</option>{% endfor %}
+    </select>
+    <input name="category" list="money-categories" placeholder="Categoría" maxlength="40" autocomplete="off">
+    <datalist id="money-categories">{% for c in categories %}<option value="{{ c }}">{% endfor %}</datalist>
+    <input name="description" placeholder="Descripción (opcional)" maxlength="200">
+    <input type="date" name="date" value="{{ today }}" aria-label="Fecha">
+    <button type="submit" class="primary">Registrar</button>
+  </form>
+</section>
+
+<details class="card">
+  <summary><strong>⇄ Cambio o transferencia entre cuentas</strong> <span class="muted small">(vender USDT, comprar USDT, mover dinero)</span></summary>
+  <form method="post" action="{{ url_for('money.create_exchange') }}" class="stack">
+    {{ csrf() }}
+    <div class="grid2">
+      <label>Sale de <select name="from_id">{% for a in s.accounts %}<option value="{{ a.id }}">{{ a.name }} ({{ 'Bs' if a.currency == 'VES' else 'USDT' }})</option>{% endfor %}</select></label>
+      <label>Monto que sale <input name="amount_out" inputmode="decimal" required autocomplete="off"></label>
+      <label>Entra en <select name="to_id">{% for a in s.accounts %}<option value="{{ a.id }}" {{ 'selected' if loop.index == 2 }}>{{ a.name }} ({{ 'Bs' if a.currency == 'VES' else 'USDT' }})</option>{% endfor %}</select></label>
+      <label>Monto que entra <input name="amount_in" inputmode="decimal" autocomplete="off" placeholder="igual si es la misma moneda"></label>
+    </div>
+    <div class="quick-row">
+      <label class="toggle"><input type="checkbox" name="update_rate" value="1" checked> Usar la tasa de este cambio como tasa actual</label>
+      <input type="date" name="date" value="{{ today }}" aria-label="Fecha">
+      <button type="submit" class="primary">Registrar cambio</button>
+    </div>
+  </form>
+</details>
+{% endif %}
+
+<div class="toolbar">
+  <h2>{{ month_name(month) | capitalize }}</h2>
+  <form method="get" class="filter money-filter">
+    <select name="mes" aria-label="Mes">{% for m in months %}<option value="{{ m }}" {{ 'selected' if m == month }}>{{ month_name(m) }}</option>{% endfor %}</select>
+    <select name="cuenta" aria-label="Cuenta"><option value="">Todas las cuentas</option>{% for a in all_accounts %}<option value="{{ a.id }}" {{ 'selected' if a.id == account_id }}>{{ a.name }}</option>{% endfor %}</select>
+    <select name="cat" aria-label="Categoría"><option value="">Todas las categorías</option>{% for c in categories %}<option {{ 'selected' if c == category }}>{{ c }}</option>{% endfor %}</select>
+    <button type="submit" class="small">Filtrar</button>
+  </form>
+</div>
+
+<div class="dash money-dash">
+  <section class="card">
+    <h2>Resumen del mes</h2>
+    <dl class="kv">
+      <dt>Gastos</dt><dd class="neg">{{ fmt(s.spent.VES, 'VES') }} · {{ fmt(s.spent.USDT, 'USDT') }}</dd>
+      <dt>Ingresos</dt><dd class="pos">{{ fmt(s.earned.VES, 'VES') }} · {{ fmt(s.earned.USDT, 'USDT') }}</dd>
+      <dt>Gasto total</dt><dd><strong>≈ {{ fmt(s.spent_usdt, 'USDT') }}</strong></dd>
+    </dl>
+  </section>
+  <section class="card">
+    <h2>Gastos por categoría <span class="muted small">(en USDT)</span></h2>
+    {% for cat, value in s.by_category %}
+      <a class="cat-row" href="{{ url_for('money.index', mes=month, cat=cat) }}">
+        <span>{{ cat }}</span><span class="muted small">{{ fmt(value, 'USDT') }}</span>
+        <progress max="{{ s.max_category }}" value="{{ value }}"></progress>
+      </a>
+    {% else %}<p class="empty">Sin gastos este mes.</p>{% endfor %}
+  </section>
+</div>
+
+<section class="list movements">
+  {% for m in movements %}
+  <article class="movement">
+    <div class="mv-main">
+      <span class="mv-title">{{ m.description or m.category or ('Cambio' if m.kind == 'cambio' else m.kind | capitalize) }}</span>
+      <span class="muted small">{{ m.date[8:10] }}/{{ m.date[5:7] }} · {{ m.account_name }}{% if m.category and m.description %} · {{ m.category }}{% endif %}</span>
+    </div>
+    <div class="mv-amount {{ 'neg' if m.amount < 0 else 'pos' }}">
+      {{ fmt(m.amount, m.currency, signed=True) }}
+      {% if m.currency == 'VES' and m.rate %}<span class="muted small">≈ {{ fmt(to_usdt(m.amount, 'VES', m.rate), 'USDT') }}</span>{% endif %}
+    </div>
+    <form method="post" action="{{ url_for('money.delete_movement', movement_id=m.id) }}" data-confirm="¿Borrar este movimiento?{{ ' (se borran las dos partes del cambio)' if m.exchange_id }}">
+      {{ csrf() }}<input type="hidden" name="next" value="{{ here }}">
+      <button class="icon" title="Borrar" aria-label="Borrar">✕</button>
+    </form>
+  </article>
+  {% else %}<p class="empty">No hay movimientos con este filtro.</p>{% endfor %}
+</section>
+
+<details class="card">
+  <summary><strong>Cuentas</strong></summary>
+  {% for a in all_accounts %}
+  <form method="post" action="{{ url_for('money.update_account', account_id=a.id) }}" class="account-row">
+    {{ csrf() }}
+    <input name="name" value="{{ a.name }}" aria-label="Nombre" maxlength="60">
+    <span class="chip">{{ 'Bs' if a.currency == 'VES' else 'USDT' }}</span>
+    <label class="inline-field small">Saldo inicial <input name="initial" inputmode="decimal" value="{{ fmt(a.initial | abs) }}"></label>
+    <label class="toggle small"><input type="checkbox" name="initial_negative" value="1" {{ 'checked' if a.initial < 0 }}> negativo</label>
+    <label class="toggle small"><input type="checkbox" name="archived" value="1" {{ 'checked' if a.archived }}> archivada</label>
+    <button type="submit" class="small">Guardar</button>
+  </form>
+  {% endfor %}
+  <form method="post" action="{{ url_for('money.create_account') }}" class="account-row new">
+    {{ csrf() }}
+    <input name="name" placeholder="Nueva cuenta" required maxlength="60">
+    <select name="currency" aria-label="Moneda"><option value="VES">Bs</option><option value="USDT">USDT</option></select>
+    <label class="inline-field small">Saldo inicial <input name="initial" inputmode="decimal" placeholder="0,00"></label>
+    <button type="submit" class="small primary">Crear cuenta</button>
+  </form>
+</details>
+{% endblock %}
