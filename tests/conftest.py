@@ -38,3 +38,13 @@ def logged(client):
         data={"password": PASSWORD, "confirm": PASSWORD, "csrf": token(client, "/configurar")},
     )
     return client
+
+
+@pytest.fixture(autouse=True)
+def _no_network(monkeypatch):
+    from notas import money
+
+    def offline(url):
+        raise OSError("tests run offline")
+
+    monkeypatch.setattr(money, "_http_get_json", offline)

@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import json
+import os
 import re
 import sqlite3
+import time
+import urllib.request
 import uuid
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
@@ -52,7 +56,8 @@ def parse_amount(raw: str | None) -> Decimal | None:
             if value.count(",") == 1
             else value.replace(",", "")
         )
-    elif value.count(".") > 1:
+    elif value.count(".") > 1 or re.fullmatch(r"\d{1,3}\.\d{3}", value):
+        # "1.000.000" or "1.500": dots as thousands separators (Venezuelan style)
         value = value.replace(".", "")
     try:
         amount = Decimal(value)
@@ -113,10 +118,77 @@ def accounts(include_archived: bool = False) -> list[dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
+# --- live rates (ve.dolarapi.com) ----------------------------------------------------------
+RATES_URL = os.environ.get("NOTAS_RATES_URL", "https://ve.dolarapi.com/v1/dolares")
+EURO_URL = os.environ.get("NOTAS_EURO_URL", "https://ve.dolarapi.com/v1/euros")
+RATES_MAX_AGE = 30 * 60  # seconds between automatic refreshes
+
+
+def _http_get_json(url: str) -> Any:
+    req = urllib.request.Request(  # noqa: S310 - fixed https URL
+        url, headers={"Accept": "application/json", "User-Agent": "mis-notas"}
+    )
+    with urllib.request.urlopen(req, timeout=6) as r:  # noqa: S310 - fixed https URL
+        return json.loads(r.read().decode())
+
+
+def _pick(data: Any, source: str) -> Decimal | None:
+    for item in data if isinstance(data, list) else []:
+        if str(item.get("fuente", "")).lower() == source:
+            for key in ("promedio", "venta", "compra"):
+                value = item.get(key)
+                if value not in (None, "", 0):
+                    try:
+                        d = Decimal(str(value))
+                    except InvalidOperation:
+                        continue
+                    if d > 0:
+                        return d
+    return None
+
+
+def refresh_rates(force: bool = False) -> bool:
+    """BCV ("oficial") and USDT ("paralelo") rates, cached in settings. Offline-safe."""
+    last = get_setting("rates_checked_at")
+    if not force and last and time.time() - float(last) < RATES_MAX_AGE:
+        return False
+    set_setting("rates_checked_at", str(time.time()))
+    try:
+        data = _http_get_json(RATES_URL)
+    except Exception:  # noqa: BLE001 - no connection: keep the last known rates
+        get_db().commit()
+        return False
+    bcv, usdt = _pick(data, "oficial"), _pick(data, "paralelo")
+    if bcv:
+        set_setting("rate_bcv", str(to_units(bcv)))
+    if usdt:
+        set_setting("rate_ves_usdt", str(to_units(usdt)))
+        set_setting("rate_date", today())
+    try:  # euros: only used by the calculator
+        euros = _http_get_json(EURO_URL)
+        for source in ("oficial", "paralelo"):
+            value = _pick(euros, source)
+            if value:
+                set_setting(f"rate_eur_{source}", str(to_units(value)))
+    except Exception:  # noqa: BLE001, S110 - optional
+        pass
+    if bcv or usdt:
+        set_setting("rates_source_at", now())
+    get_db().commit()
+    return bool(bcv or usdt)
+
+
+def bcv_rate() -> int | None:
+    value = get_setting("rate_bcv")
+    return int(value) if value else None
+
+
 def summary(month: str | None = None) -> dict[str, Any]:
     """Balances, totals and this month's income/expenses (for the page and the home)."""
     month = month or today()[:7]
+    refresh_rates()
     rate = current_rate()
+    bcv = bcv_rate()
     accts = accounts()
     totals = {c: sum(a["balance"] for a in accts if a["currency"] == c) for c in CURRENCIES}
     usdt_total = totals["USDT"] + (to_usdt(totals["VES"], "VES", rate) or 0)
@@ -145,9 +217,25 @@ def summary(month: str | None = None) -> dict[str, Any]:
         else:
             earned[r["currency"]] += r["amount"]
     cats = sorted(by_category.items(), key=lambda kv: -kv[1])
+    # BCV reference: Bs / BCV, and USDT -> Bs (at the USDT rate) -> / BCV.
+    ves_bcv = round(totals["VES"] * SCALE / bcv) if bcv else None
+    usdt_bcv = round(totals["USDT"] * rate / bcv) if bcv and rate else None
+    ves_in_usdt = to_usdt(totals["VES"], "VES", rate) or 0
+    share_total = max(ves_in_usdt, 0) + max(totals["USDT"], 0)
     return {
         "month": month,
         "rate": rate,
+        "bcv": bcv,
+        "eur_oficial": get_setting("rate_eur_oficial"),
+        "eur_paralelo": get_setting("rate_eur_paralelo"),
+        "rates_source_at": get_setting("rates_source_at"),
+        "ves_bcv": ves_bcv,
+        "usdt_bcv": usdt_bcv,
+        "bcv_total": (ves_bcv or 0) + (usdt_bcv or 0) if bcv else None,
+        "gap_pct": round((rate / bcv - 1) * 100, 1) if bcv and rate else None,
+        "ves_in_usdt": ves_in_usdt,
+        "share_ves": round(max(ves_in_usdt, 0) * 100 / share_total, 1) if share_total else 0,
+        "share_usdt": round(max(totals["USDT"], 0) * 100 / share_total, 1) if share_total else 0,
         "rate_date": get_setting("rate_date"),
         "accounts": accts,
         "totals": totals,
@@ -284,6 +372,18 @@ def update_account(account_id: int) -> Response:
         flash("Cuenta actualizada.", "ok")
     except sqlite3.IntegrityError:
         flash("Ya existe una cuenta con ese nombre.", "error")
+    return redirect(url_for("money.index"))
+
+
+@bp.post("/dinero/tasas/actualizar")
+@login_required
+def update_rates() -> Response:
+    if refresh_rates(force=True):
+        flash("Tasas BCV y USDT actualizadas.", "ok")
+    else:
+        flash(
+            "No se pudieron obtener las tasas ahora (¿sin conexión?). Se usan las últimas.", "error"
+        )
     return redirect(url_for("money.index"))
 
 

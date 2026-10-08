@@ -11,6 +11,9 @@ def test_parse_amount_formats():
     assert parse_amount("25,5") == Decimal("25.5")
     assert parse_amount("1.000.000") == Decimal("1000000")
     assert parse_amount("12") == Decimal("12")
+    assert parse_amount("1.500") == Decimal("1500")
+    assert parse_amount("12.5") == Decimal("12.5")
+    assert parse_amount("0.15") == Decimal("0.15")
     assert parse_amount("Bs 3.500,00") == Decimal("3500.00")
     assert parse_amount("0") is None and parse_amount("abc") is None
     assert fmt(to_units(Decimal("1234567.891")), "VES") == "1.234.567,89 Bs"

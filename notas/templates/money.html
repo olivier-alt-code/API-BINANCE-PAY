@@ -26,12 +26,28 @@
 {% endif %}
 
 {% if s.accounts %}
+<section class="rates-strip">
+  <div><span class="muted small">USDT (paralelo)</span><strong>{{ fmt(s.rate, 'VES') if s.rate else '—' }}</strong></div>
+  <div><span class="muted small">$ BCV (oficial)</span><strong>{{ fmt(s.bcv, 'VES') if s.bcv else '—' }}</strong></div>
+  {% if s.gap_pct is not none %}<div><span class="muted small">Brecha</span><strong>{{ s.gap_pct | string | replace('.', ',') }} %</strong></div>{% endif %}
+  <form method="post" action="{{ url_for('money.update_rates') }}">{{ csrf() }}
+    <button type="submit" class="small">{{ icon('refresh') }} Actualizar</button></form>
+  {% if s.rates_source_at %}<span class="muted small">ve.dolarapi.com · {{ s.rates_source_at[8:10] }}/{{ s.rates_source_at[5:7] }} {{ s.rates_source_at[11:16] }}</span>{% endif %}
+</section>
+
 <section class="balances">
   <div class="balance total">
     <span class="muted small">{{ icon('wallet') }} Total</span>
     <strong>{{ fmt(s.usdt_total, 'USDT') }}</strong>
     <span class="muted small">{% if s.ves_total is not none %}≈ {{ fmt(s.ves_total, 'VES') }}{% else %}Pon la tasa para sumar los Bs{% endif %}</span>
   </div>
+  {% if s.bcv %}
+  <div class="balance bcv">
+    <span class="muted small">Referencia $ BCV</span>
+    <strong>{{ fmt(s.bcv_total) }} $</strong>
+    <span class="muted small">Bs → {{ fmt(s.ves_bcv) }} $ · USDT → {{ fmt(s.usdt_bcv) }} $</span>
+  </div>
+  {% endif %}
   {% for a in s.accounts %}
   <div class="balance {{ 'usdt' if a.currency == 'USDT' else 'ves' }}">
     <span class="muted small">{{ a.name }}</span>
@@ -88,6 +104,46 @@
     <button type="submit" class="small">Filtrar</button>
   </form>
 </div>
+
+<details class="card calc" open>
+  <summary><strong>{{ icon('swap') }} Calculadora</strong> <span class="muted small">(funciona sin conexión con las últimas tasas)</span></summary>
+  <div class="calc-body" data-calc
+       data-usdt="{{ fmt(s.rate) if s.rate else '' }}" data-bcv="{{ fmt(s.bcv) if s.bcv else '' }}"
+       data-eur-oficial="{{ fmt(s.eur_oficial | int) if s.eur_oficial else '' }}" data-eur-paralelo="{{ fmt(s.eur_paralelo | int) if s.eur_paralelo else '' }}">
+    <div class="calc-input">
+      <input type="text" inputmode="decimal" placeholder="Monto" data-calc-amount aria-label="Monto">
+      <select data-calc-from aria-label="Moneda">
+        <option value="VES">Bs</option><option value="BCV">$ BCV</option><option value="USDT">USDT</option>
+        <option value="EUR_OF">€ oficial</option><option value="EUR_PA">€ paralelo</option>
+      </select>
+    </div>
+    <div class="calc-out" data-calc-out></div>
+  </div>
+</details>
+
+<section class="card distribution">
+  <h2>{{ icon('wallet') }} Distribución: bolívares vs USDT</h2>
+  <div class="dist-body">
+    <svg class="donut" viewBox="0 0 42 42" role="img" aria-label="Bolívares {{ s.share_ves }} %, USDT {{ s.share_usdt }} %">
+      <circle cx="21" cy="21" r="15.915" fill="none" stroke="var(--border)" stroke-width="6"></circle>
+      <circle cx="21" cy="21" r="15.915" fill="none" class="seg-usdt" stroke-width="6" stroke-dasharray="{{ s.share_usdt }} {{ 100 - s.share_usdt }}" stroke-dashoffset="25"></circle>
+      <circle cx="21" cy="21" r="15.915" fill="none" class="seg-ves" stroke-width="6" stroke-dasharray="{{ s.share_ves }} {{ 100 - s.share_ves }}" stroke-dashoffset="{{ 25 - s.share_usdt }}"></circle>
+      <text x="21" y="20" class="donut-big">{{ fmt(s.usdt_total) }}</text>
+      <text x="21" y="25.5" class="donut-small">USDT total</text>
+    </svg>
+    <table class="dist-table">
+      <thead><tr><th></th><th>Tienes</th><th>En USDT</th><th>En $ BCV</th></tr></thead>
+      <tbody>
+        <tr><td><span class="key ves"></span>Bolívares <span class="muted small">{{ s.share_ves | string | replace('.', ',') }} %</span></td>
+          <td>{{ fmt(s.totals.VES, 'VES') }}</td><td>{{ fmt(s.ves_in_usdt) }}</td><td>{{ fmt(s.ves_bcv) if s.ves_bcv is not none else '—' }}</td></tr>
+        <tr><td><span class="key usdt"></span>USDT <span class="muted small">{{ s.share_usdt | string | replace('.', ',') }} %</span></td>
+          <td>{{ fmt(s.totals.USDT, 'USDT') }}</td><td>{{ fmt(s.totals.USDT) }}</td><td>{{ fmt(s.usdt_bcv) if s.usdt_bcv is not none else '—' }}</td></tr>
+        <tr class="total-row"><td>Total</td><td></td><td>{{ fmt(s.usdt_total) }}</td><td>{{ fmt(s.bcv_total) if s.bcv_total is not none else '—' }}</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="muted small">El balance general son tus USDT más tus bolívares convertidos a USDT (tasa paralelo). La columna $ BCV es solo una referencia: los Bs divididos entre la tasa oficial y los USDT pasados a Bs y luego a $ BCV.</p>
+</section>
 
 <div class="dash money-dash">
   <section class="card">

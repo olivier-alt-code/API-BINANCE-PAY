@@ -198,3 +198,35 @@
     });
   }
 })();
+
+// Currency calculator (client side, works offline with the rates rendered in the page).
+(() => {
+  const box = document.querySelector("[data-calc]");
+  if (!box) return;
+  const num = (s) => {
+    s = (s || "").replace(/[^\d.,]/g, "");
+    if (s.includes(",") && s.includes(".")) s = s.lastIndexOf(",") > s.lastIndexOf(".") ? s.replace(/\./g, "").replace(",", ".") : s.replace(/,/g, "");
+    else if (s.includes(",")) s = s.replace(/\./g, "").replace(",", ".");
+    else if ((s.match(/\./g) || []).length > 1 || /^\d{1,3}\.\d{3}$/.test(s)) s = s.replace(/\./g, "");
+    return parseFloat(s);
+  };
+  const rates = { VES: 1, BCV: num(box.dataset.bcv), USDT: num(box.dataset.usdt), EUR_OF: num(box.dataset.eurOficial), EUR_PA: num(box.dataset.eurParalelo) };
+  const names = { VES: "Bs", BCV: "$ BCV", USDT: "USDT", EUR_OF: "€ oficial", EUR_PA: "€ paralelo" };
+  const fmt = (v) => v.toLocaleString("es-VE", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const amount = box.querySelector("[data-calc-amount]"), from = box.querySelector("[data-calc-from]"), out = box.querySelector("[data-calc-out]");
+  function render() {
+    const v = num(amount.value), r = rates[from.value];
+    out.replaceChildren();
+    for (const k of Object.keys(rates)) {
+      if (k === from.value) continue;
+      const div = document.createElement("div");
+      div.className = "calc-row";
+      const label = document.createElement("span"); label.className = "muted small"; label.textContent = names[k];
+      const val = document.createElement("strong");
+      val.textContent = !isNaN(v) && r && rates[k] ? fmt(v * r / rates[k]) : "—";
+      div.append(label, val);
+      out.append(div);
+    }
+  }
+  amount.addEventListener("input", render); from.addEventListener("change", render); render();
+})();
