@@ -415,4 +415,4 @@ def month_name(value: str) -> str:
 
 
 def days_ago(value: str | None) -> int | None:
-    return (date.today() - date.fromisoformat(value)).days if value else None
+    return (date.fromisoformat(today()) - date.fromisoformat(value)).days if value else None

@@ -91,6 +91,7 @@ datos en otra carpeta, por ejemplo una sincronizada, usa `NOTAS_DATA_DIR=C:\ruta
 | `NOTAS_HOST` / `NOTAS_PORT` | `127.0.0.1` / `5000` | Dónde escucha |
 | `NOTAS_IDLE_MINUTES` | `30` | Bloqueo por inactividad |
 | `NOTAS_HTTPS` | `0` | `1` si la sirves por HTTPS (cookie `Secure`) |
+| `NOTAS_TZ` | `America/Caracas` | Zona horaria de fechas, saludos y "hoy"/"vencido" |
 
 ## Desarrollo
 

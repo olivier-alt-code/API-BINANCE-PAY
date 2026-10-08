@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
-from datetime import date, datetime
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from flask import current_app, g
 
@@ -126,12 +128,21 @@ def init_db(path: str) -> None:
         conn.close()
 
 
+# All dates and times are local to the user (Venezuela by default), not to the server,
+# which may run in UTC (e.g. in the cloud). Change it with NOTAS_TZ=Region/City.
+TZ = ZoneInfo(os.environ.get("NOTAS_TZ", "America/Caracas"))
+
+
+def local_now() -> datetime:
+    return datetime.now(TZ)
+
+
 def now() -> str:
-    return datetime.now().isoformat(timespec="seconds")
+    return local_now().replace(tzinfo=None).isoformat(timespec="seconds")
 
 
 def today() -> str:
-    return date.today().isoformat()
+    return local_now().date().isoformat()
 
 
 def get_setting(key: str) -> str | None:

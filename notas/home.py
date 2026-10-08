@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import datetime
-
 from flask import Blueprint, render_template, request
 
-from notas.db import get_db, today
+from notas.db import get_db, local_now, today
 from notas.money import summary as money_summary
 from notas.notes import query_notes
 from notas.plans import recent_plans
@@ -28,7 +26,7 @@ def index() -> str:
     overdue = db.execute(
         "SELECT COUNT(*) FROM notes WHERE is_task = 1 AND done = 0 AND due_date < ?", (today(),)
     ).fetchone()[0]
-    now = datetime.now()
+    now = local_now()
     greeting = (
         "Buenos días"
         if 5 <= now.hour < 12

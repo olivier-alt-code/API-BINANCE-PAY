@@ -32,7 +32,7 @@ def due_label(value: str | None) -> tuple[str, str] | None:
         due = date.fromisoformat(value)
     except ValueError:
         return None
-    today = date.today()
+    today = db.local_now().date()
     delta = (due - today).days
     if delta < 0:
         return (f"vencido {due:%d/%m}", "overdue")
