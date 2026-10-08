@@ -1,0 +1,15 @@
+{% from "_macros.html" import csrf %}
+{{ csrf() }}
+<div class="grid2">
+  <label>Nombre <input name="name" value="{{ entry.name if entry else '' }}" required maxlength="120" placeholder="Gmail, Banco…"></label>
+  <label>Usuario / email <input name="username" value="{{ entry.username if entry else '' }}" maxlength="200" autocomplete="off"></label>
+</div>
+<label>Contraseña
+  <span class="pw-field">
+    <input type="password" name="password" id="pw-input" value="{{ entry.password if entry else '' }}" required maxlength="500" autocomplete="new-password">
+    <button type="button" class="small" data-toggle-password="pw-input">Ver</button>
+    <button type="button" class="small" data-generate="pw-input">Generar</button>
+  </span>
+</label>
+<label>Web <input name="url" value="{{ entry.url if entry else '' }}" maxlength="500" placeholder="ejemplo.com"></label>
+<label>Notas (cifradas) <textarea name="notes" rows="2" maxlength="2000">{{ entry.notes if entry else '' }}</textarea></label>

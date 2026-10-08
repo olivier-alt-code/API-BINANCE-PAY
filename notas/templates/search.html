@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% from "_macros.html" import note_item %}
+{% block title %}Buscar{% endblock %}
+{% block content %}
+<header class="page-head">
+  <h1>Buscar</h1>
+  <form method="get" class="filter wide"><input type="search" name="q" value="{{ q }}" placeholder="Palabra, #etiqueta, frase…" autofocus aria-label="Buscar"></form>
+</header>
+{% if q %}
+  <h2>Notas ({{ notes | length }})</h2>
+  <section class="list">
+    {% for n in notes %}{{ note_item(n, request.full_path, show_project=True) }}{% else %}<p class="empty">Sin resultados en notas.</p>{% endfor %}
+  </section>
+  <h2>Planes ({{ plans | length }})</h2>
+  {% for p in plans %}<a class="plan-row" href="{{ url_for('plans.detail', plan_id=p.id) }}"><span class="plan-title">{{ p.title }}</span></a>
+  {% else %}<p class="empty">Sin resultados en planes.</p>{% endfor %}
+  <p class="muted small">Las contraseñas se buscan en su propia sección.</p>
+{% endif %}
+{% endblock %}

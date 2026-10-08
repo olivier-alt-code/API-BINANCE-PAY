@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Contraseñas{% endblock %}
+{% block content %}
+<header class="page-head row">
+  <div><h1>Contraseñas</h1><p class="muted">Cifradas con tu contraseña maestra. Se bloquean al cerrar sesión o tras {{ config.IDLE_TIMEOUT_SECONDS // 60 }} min sin uso.</p></div>
+  <form method="get" class="filter"><input type="search" name="q" value="{{ q }}" placeholder="Buscar…" aria-label="Buscar" autofocus></form>
+</header>
+
+<details class="card" {{ 'open' if not entries and not q }}>
+  <summary><strong>＋ Nueva contraseña</strong></summary>
+  <form method="post" action="{{ url_for('vault.create') }}" class="stack">
+    {% with entry=None %}{% include "_vault_form.html" %}{% endwith %}
+    <button type="submit" class="primary">Guardar</button>
+  </form>
+</details>
+
+<section class="vault-list">
+  {% for e in entries %}
+  <article class="card vault-item">
+    <div class="vault-name">
+      <strong>{{ e.name }}</strong>
+      {% if e.url %}<a class="small muted" href="{{ e.url }}" target="_blank" rel="noopener noreferrer">{{ e.url | replace('https://', '') | replace('http://', '') }}</a>{% endif %}
+    </div>
+    <div class="vault-fields">
+      {% if e.username %}
+      <span class="field"><span class="muted small">Usuario</span> <code>{{ e.username }}</code>
+        <button type="button" class="small" data-copy-value="{{ e.username }}">Copiar</button></span>
+      {% endif %}
+      <span class="field"><span class="muted small">Clave</span> <code class="secret" data-secret="{{ e.password }}">••••••••</code>
+        <button type="button" class="small" data-reveal>Ver</button>
+        <button type="button" class="small primary" data-copy-value="{{ e.password }}">Copiar</button></span>
+    </div>
+    {% if e.notes %}<p class="small muted pre">{{ e.notes }}</p>{% endif %}
+    <a class="small" href="{{ url_for('vault.edit', entry_id=e.id) }}">Editar</a>
+  </article>
+  {% else %}
+    <p class="empty">{{ 'Nada coincide.' if q else 'Todavía no guardaste ninguna.' }}</p>
+  {% endfor %}
+</section>
+{% endblock %}

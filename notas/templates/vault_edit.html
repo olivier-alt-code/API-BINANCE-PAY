@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% from "_macros.html" import csrf %}
+{% block title %}Editar · {{ entry.name }}{% endblock %}
+{% block content %}
+<header class="page-head">
+  <p class="crumbs"><a href="{{ url_for('vault.index') }}">← Contraseñas</a></p>
+  <h1>{{ entry.name }}</h1>
+</header>
+<form method="post" action="{{ url_for('vault.update', entry_id=entry.id) }}" class="card stack">
+  {% include "_vault_form.html" %}
+  <button type="submit" class="primary">Guardar</button>
+</form>
+<form method="post" action="{{ url_for('vault.delete', entry_id=entry.id) }}" class="right" data-confirm="¿Borrar «{{ entry.name }}»?">
+  {{ csrf() }}<button type="submit" class="danger">Borrar</button>
+</form>
+{% endblock %}

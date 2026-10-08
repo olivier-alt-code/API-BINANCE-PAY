@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% from "_macros.html" import note_item, quick_add, csrf %}
+{% block title %}{{ project.name if project else 'Rutina y pendientes' }}{% endblock %}
+{% block content %}
+{% if project %}
+  {% set base = url_for('notes.project', project_id=project.id) %}
+{% else %}
+  {% set base = url_for('notes.rutina') %}
+{% endif %}
+{% set here = request.full_path.rstrip('?') %}
+
+<header class="page-head">
+  {% if project %}
+    <p class="crumbs"><a href="{{ url_for('notes.projects') }}">Proyectos</a> /</p>
+    <h1><span class="dot {{ color_class(project.color) }}"></span>{{ project.name }}{% if project.archived %} <span class="chip">archivado</span>{% endif %}</h1>
+    {% if project.description %}<p class="muted">{{ project.description }}</p>{% endif %}
+  {% else %}
+    <h1>Rutina y pendientes</h1>
+    <p class="muted">Hábitos, horarios, recados y todo lo que tengas pendiente.</p>
+  {% endif %}
+</header>
+
+{{ quick_add(here, project_id=project.id if project else None, task_default=(view == 'pendientes'),
+             placeholder=('Apunte del proyecto: idea, cálculo, decisión, pendiente…' if project else 'Escribe una nota o un pendiente… (la primera línea es el título)')) }}
+
+<div class="toolbar">
+  <nav class="tabs">
+    {% for key, label in views.items() %}
+      <a href="{{ base }}?vista={{ key }}{% if q %}&q={{ q | urlencode }}{% endif %}{% if tag %}&tag={{ tag | urlencode }}{% endif %}" class="{{ 'active' if view == key }}">{{ label }} <span class="count">{{ counts[key] }}</span></a>
+    {% endfor %}
+  </nav>
+  <form method="get" action="{{ base }}" class="filter">
+    <input type="hidden" name="vista" value="{{ view }}">
+    {% if tag %}<input type="hidden" name="tag" value="{{ tag }}">{% endif %}
+    <input type="search" name="q" value="{{ q }}" placeholder="Buscar aquí…" aria-label="Buscar">
+  </form>
+</div>
+
+{% if tags %}
+<div class="tag-cloud">
+  {% for t, c in tags %}
+    <a class="tag{{ ' active' if tag == t }}" href="{{ base }}?vista={{ view }}{% if tag != t %}&tag={{ t | urlencode }}{% endif %}{% if q %}&q={{ q | urlencode }}{% endif %}">#{{ t }} <span class="count">{{ c }}</span></a>
+  {% endfor %}
+</div>
+<datalist id="tag-suggestions">{% for t, _ in tags %}<option value="{{ t }}">{% endfor %}</datalist>
+{% endif %}
+
+<section class="list">
+  {% for n in notes %}{{ note_item(n, here) }}
+  {% else %}
+    <p class="empty">{% if q or tag %}Nada coincide con el filtro.{% elif view == 'pendientes' %}Sin pendientes. 🎉{% else %}Todavía no hay nada aquí.{% endif %}</p>
+  {% endfor %}
+</section>
+
+{% if project %}
+<details class="card danger-zone">
+  <summary>Editar proyecto</summary>
+  <form method="post" action="{{ url_for('notes.update_project', project_id=project.id) }}" class="stack">
+    {{ csrf() }}
+    <label>Nombre <input name="name" value="{{ project.name }}" required maxlength="80"></label>
+    <label>Descripción <textarea name="description" rows="2" maxlength="500">{{ project.description }}</textarea></label>
+    <fieldset class="colors"><legend>Color</legend>
+      {% for c in colors %}<label class="swatch c{{ loop.index0 }}"><input type="radio" name="color" value="{{ c }}" {{ 'checked' if c == project.color }}><span></span></label>{% endfor %}
+    </fieldset>
+    <label class="toggle"><input type="checkbox" name="archived" value="1" {{ 'checked' if project.archived }}> Archivado (se oculta de la lista)</label>
+    <button type="submit">Guardar proyecto</button>
+  </form>
+  <form method="post" action="{{ url_for('notes.delete_project', project_id=project.id) }}" class="stack delete">
+    {{ csrf() }}
+    <label>Para borrar el proyecto y <strong>todas sus notas</strong>, escribe su nombre:
+      <input name="confirm" autocomplete="off" placeholder="{{ project.name }}"></label>
+    <button type="submit" class="danger">Borrar proyecto</button>
+  </form>
+</details>
+{% endif %}
+{% endblock %}

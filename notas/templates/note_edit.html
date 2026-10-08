@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% from "_macros.html" import csrf %}
+{% block title %}{{ note.title or 'Nota' }}{% endblock %}
+{% block content %}
+{% set home = url_for('notes.project', project_id=note.project_id) if note.project_id else url_for('notes.rutina') %}
+{% set next = request.args.get('next') or home %}
+<header class="page-head">
+  <p class="crumbs"><a href="{{ next }}">← Volver</a></p>
+  <h1>Editar {{ 'pendiente' if note.is_task else 'nota' }}</h1>
+  <p class="muted small">Creada {{ note.created_at | replace('T', ' ') }} · editada {{ note.updated_at | replace('T', ' ') }}</p>
+</header>
+<form method="post" action="{{ url_for('notes.update_note', note_id=note.id) }}" class="card stack">
+  {{ csrf() }}<input type="hidden" name="next" value="{{ next }}">
+  <input name="title" value="{{ note.title }}" placeholder="Título" maxlength="200" class="title-input">
+  <textarea name="body" rows="12" placeholder="Contenido" data-autogrow data-submit-ctrl-enter>{{ note.body }}</textarea>
+  <div class="grid2">
+    <label>Etiquetas <input name="tags" value="{{ note.tags | replace(',', ', ') }}" placeholder="casa, gym"></label>
+    <label>Sección
+      <select name="project_id">
+        <option value="">Rutina y pendientes</option>
+        {% for p in projects %}<option value="{{ p.id }}" {{ 'selected' if p.id == note.project_id }}>Proyecto: {{ p.name }}</option>{% endfor %}
+      </select>
+    </label>
+  </div>
+  <div class="quick-row">
+    <label class="toggle"><input type="checkbox" name="is_task" value="1" {{ 'checked' if note.is_task }}> Es un pendiente</label>
+    <label class="inline-field">Fecha <input type="date" name="due_date" value="{{ note.due_date or '' }}"></label>
+    <label class="toggle"><input type="checkbox" name="pinned" value="1" {{ 'checked' if note.pinned }}> Fijada arriba</label>
+    <button type="submit" class="primary">Guardar <kbd>Ctrl+↵</kbd></button>
+  </div>
+</form>
+<form method="post" action="{{ url_for('notes.delete_note', note_id=note.id) }}" class="right" data-confirm="¿Borrar esta nota?">
+  {{ csrf() }}<input type="hidden" name="next" value="{{ next if not next.startswith('/notas/') else home }}">
+  <button type="submit" class="danger">Borrar</button>
+</form>
+{% endblock %}

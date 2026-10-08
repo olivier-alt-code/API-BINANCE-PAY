@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% from "_macros.html" import csrf %}
+{% block title %}{{ plan.title }}{% endblock %}
+{% block content %}
+{% set due = due_label(plan.target_date) %}
+<header class="page-head">
+  <p class="crumbs"><a href="{{ url_for('plans.index') }}">Planificación</a> /</p>
+  <h1>{{ plan.title }}{% if plan.archived %} <span class="chip">archivado</span>{% endif %}</h1>
+  {% if plan.description %}<p class="pre">{{ plan.description }}</p>{% endif %}
+  <div class="progress-line">
+    <progress max="{{ steps | length or 1 }}" value="{{ done }}"></progress>
+    <span>{{ done }}/{{ steps | length }} hechos</span>
+    {% if due and done != steps | length %}<span class="due {{ due[1] }}">objetivo: {{ due[0] }}</span>{% endif %}
+  </div>
+</header>
+
+<section class="card" id="pasos">
+  <ol class="steps">
+    {% for s in steps %}
+    {% set sdue = due_label(s.due_date) if not s.done else None %}
+    <li class="step{{ ' done' if s.done }}">
+      <form method="post" action="{{ url_for('plans.toggle_step', step_id=s.id) }}" class="check">
+        {{ csrf() }}<input type="hidden" name="next" value="{{ url_for('plans.detail', plan_id=plan.id) }}#pasos">
+        <button type="submit" class="checkbox" aria-label="Hecho">{{ '✓' if s.done }}</button>
+      </form>
+      <span class="step-text">{{ s.text }}{% if sdue %} <span class="due {{ sdue[1] }}">{{ sdue[0] }}</span>{% endif %}</span>
+      <span class="step-actions">
+        <form method="post" action="{{ url_for('plans.move_step', step_id=s.id) }}">{{ csrf() }}<input type="hidden" name="dir" value="up"><button class="icon" title="Subir" {{ 'disabled' if loop.first }}>↑</button></form>
+        <form method="post" action="{{ url_for('plans.move_step', step_id=s.id) }}">{{ csrf() }}<input type="hidden" name="dir" value="down"><button class="icon" title="Bajar" {{ 'disabled' if loop.last }}>↓</button></form>
+        <form method="post" action="{{ url_for('plans.delete_step', step_id=s.id) }}">{{ csrf() }}<button class="icon" title="Quitar">✕</button></form>
+      </span>
+    </li>
+    {% else %}<li class="empty">Sin pasos todavía.</li>{% endfor %}
+  </ol>
+  <form method="post" action="{{ url_for('plans.add_step', plan_id=plan.id) }}" class="add-step">
+    {{ csrf() }}
+    <textarea name="text" rows="1" placeholder="Añadir paso (varias líneas = varios pasos)" required data-autogrow data-submit-ctrl-enter></textarea>
+    <input type="date" name="due_date" aria-label="Fecha del paso">
+    <button type="submit" class="primary">Añadir</button>
+  </form>
+</section>
+
+<details class="card">
+  <summary>Editar plan</summary>
+  <form method="post" action="{{ url_for('plans.update', plan_id=plan.id) }}" class="stack">
+    {{ csrf() }}
+    <input name="title" value="{{ plan.title }}" required maxlength="150">
+    <textarea name="description" rows="3">{{ plan.description }}</textarea>
+    <label class="inline-field">Fecha objetivo <input type="date" name="target_date" value="{{ plan.target_date or '' }}"></label>
+    <label class="toggle"><input type="checkbox" name="archived" value="1" {{ 'checked' if plan.archived }}> Archivado</label>
+    <button type="submit">Guardar</button>
+  </form>
+  <form method="post" action="{{ url_for('plans.delete', plan_id=plan.id) }}" data-confirm="¿Borrar el plan y todos sus pasos?" class="right">
+    {{ csrf() }}<button type="submit" class="danger">Borrar plan</button>
+  </form>
+</details>
+{% endblock %}

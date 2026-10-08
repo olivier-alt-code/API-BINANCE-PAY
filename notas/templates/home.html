@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% from "_macros.html" import note_item, quick_add %}
+{% block content %}
+<header class="page-head">
+  <h1>Hola 👋</h1>
+  <p class="muted">Captura rápido; ordénalo después.</p>
+</header>
+
+{{ quick_add(url_for('home.index'), placeholder='Apunte rápido para tu rutina… (la primera línea es el título)') }}
+
+<div class="dash">
+  <section class="card">
+    <div class="card-head">
+      <h2>Pendientes {% if overdue %}<span class="due overdue">{{ overdue }} vencido{{ 's' if overdue != 1 }}</span>{% endif %}</h2>
+      <a href="{{ url_for('notes.rutina', vista='pendientes') }}">Ver todos →</a>
+    </div>
+    {% for n in upcoming %}{{ note_item(n, url_for('home.index'), show_project=True) }}
+    {% else %}<p class="empty">Nada pendiente. 🎉</p>{% endfor %}
+  </section>
+
+  <section class="card">
+    <div class="card-head"><h2>Rutina · notas recientes</h2><a href="{{ url_for('notes.rutina', vista='notas') }}">Ver →</a></div>
+    {% for n in rutina %}{{ note_item(n, url_for('home.index')) }}
+    {% else %}<p class="empty">Aún no hay notas de rutina.</p>{% endfor %}
+  </section>
+
+  <section class="card">
+    <div class="card-head"><h2>Proyectos · recientes</h2><a href="{{ url_for('notes.projects') }}">Ver →</a></div>
+    {% for n in proyectos %}{{ note_item(n, url_for('home.index'), show_project=True) }}
+    {% else %}<p class="empty">Crea un proyecto para empezar a anotar.</p>{% endfor %}
+  </section>
+
+  <section class="card">
+    <div class="card-head"><h2>Planes activos</h2><a href="{{ url_for('plans.index') }}">Ver →</a></div>
+    {% for p in plans %}
+      <a class="plan-row" href="{{ url_for('plans.detail', plan_id=p.id) }}">
+        <span class="plan-title">{{ p.title }}</span>
+        <progress max="{{ p.steps or 1 }}" value="{{ p.done_steps }}"></progress>
+        <span class="muted small">{{ p.done_steps }}/{{ p.steps }}{% if p.next_step %} · siguiente: {{ p.next_step }}{% endif %}</span>
+      </a>
+    {% else %}<p class="empty">Sin planes todavía.</p>{% endfor %}
+  </section>
+
+  <section class="card compact">
+    <div class="card-head"><h2>Contraseñas</h2><a href="{{ url_for('vault.index') }}">Abrir →</a></div>
+    <p class="muted">{{ vault_count }} guardada{{ 's' if vault_count != 1 }}, cifradas con tu contraseña maestra.</p>
+  </section>
+</div>
+{% endblock %}

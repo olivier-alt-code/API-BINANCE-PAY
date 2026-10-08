@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% from "_macros.html" import csrf %}
+{% block title %}Entrar{% endblock %}
+{% block content %}
+<form method="post" class="card auth stack">
+  {{ csrf() }}<input type="hidden" name="next" value="{{ next }}">
+  <h1>▦ Mis notas</h1>
+  {% if error %}<div class="flash error">{{ error }}</div>{% endif %}
+  <label>Contraseña maestra <input type="password" name="password" required autofocus autocomplete="current-password"></label>
+  <button type="submit" class="primary">Entrar</button>
+</form>
+{% endblock %}

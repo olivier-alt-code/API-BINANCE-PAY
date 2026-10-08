@@ -1,0 +1,42 @@
+{% macro csrf() %}<input type="hidden" name="csrf" value="{{ csrf_token() }}">{% endmacro %}
+
+{% macro note_item(n, next, show_project=False) %}
+{% set due = due_label(n.due_date) if n.is_task and not n.done else None %}
+<article class="note{{ ' task' if n.is_task }}{{ ' done' if n.done }}{{ ' pinned' if n.pinned }}">
+  {% if n.is_task %}
+  <form method="post" action="{{ url_for('notes.toggle_done', note_id=n.id) }}" class="check">
+    {{ csrf() }}<input type="hidden" name="next" value="{{ next }}">
+    <button type="submit" class="checkbox" title="{{ 'Marcar como pendiente' if n.done else 'Marcar como hecho' }}" aria-label="Hecho">{{ '✓' if n.done }}</button>
+  </form>
+  {% endif %}
+  <a class="note-main" href="{{ url_for('notes.edit_note', note_id=n.id, next=next) }}">
+    <div class="note-title">{{ n.title or n.body[:90] }}</div>
+    {% if n.title and n.body %}<div class="note-body">{{ n.body }}</div>{% endif %}
+    <div class="meta">
+      {% if show_project and n.project_name %}<span class="chip {{ color_class(n.project_color) }}">{{ n.project_name }}</span>{% endif %}
+      {% if due %}<span class="due {{ due[1] }}">{{ due[0] }}</span>{% endif %}
+      {% for t in n.tags.split(',') if t %}<span class="tag">#{{ t }}</span>{% endfor %}
+      <span class="when">{{ n.updated_at[:10] | replace('-', '/') }}</span>
+    </div>
+  </a>
+  <form method="post" action="{{ url_for('notes.toggle_pin', note_id=n.id) }}" class="pin">
+    {{ csrf() }}<input type="hidden" name="next" value="{{ next }}">
+    <button type="submit" class="icon{{ ' on' if n.pinned }}" title="{{ 'Desfijar' if n.pinned else 'Fijar arriba' }}" aria-label="Fijar">★</button>
+  </form>
+</article>
+{% endmacro %}
+
+{% macro quick_add(next, project_id=None, task_default=False, placeholder='Escribe una nota o un pendiente… (la primera línea es el título)') %}
+<form method="post" action="{{ url_for('notes.create_note') }}" class="quick-add card">
+  {{ csrf() }}
+  <input type="hidden" name="next" value="{{ next }}">
+  {% if project_id %}<input type="hidden" name="project_id" value="{{ project_id }}">{% endif %}
+  <textarea name="body" rows="2" placeholder="{{ placeholder }}" required data-autogrow data-submit-ctrl-enter></textarea>
+  <div class="quick-row">
+    <label class="toggle"><input type="checkbox" name="is_task" value="1" {{ 'checked' if task_default }}> Pendiente</label>
+    <label class="inline-field">Fecha <input type="date" name="due_date"></label>
+    <input type="text" name="tags" placeholder="etiquetas (separadas por comas)" class="tags-input" list="tag-suggestions">
+    <button type="submit" class="primary">Guardar <kbd>Ctrl+↵</kbd></button>
+  </div>
+</form>
+{% endmacro %}

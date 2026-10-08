@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% from "_macros.html" import csrf %}
+{% block title %}Ajustes{% endblock %}
+{% block content %}
+<header class="page-head"><h1>Ajustes</h1></header>
+<form method="post" class="card stack narrow">
+  {{ csrf() }}
+  <h2>Cambiar contraseña maestra</h2>
+  <p class="muted small">Todas las contraseñas guardadas se vuelven a cifrar con la nueva.</p>
+  {% if error %}<div class="flash error">{{ error }}</div>{% endif %}
+  <label>Actual <input type="password" name="current" required autocomplete="current-password"></label>
+  <label>Nueva <input type="password" name="new" required minlength="8" autocomplete="new-password"></label>
+  <label>Repite la nueva <input type="password" name="confirm" required minlength="8" autocomplete="new-password"></label>
+  <button type="submit" class="primary">Cambiar</button>
+</form>
+<div class="card narrow">
+  <h2>Copia de seguridad</h2>
+  <p class="muted small">Todo vive en un único archivo: <code>{{ config.DATABASE }}</code>. Cópialo con la app
+    cerrada. Las contraseñas solo se pueden leer con tu contraseña maestra.</p>
+</div>
+{% endblock %}

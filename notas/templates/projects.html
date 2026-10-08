@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% from "_macros.html" import note_item, csrf %}
+{% block title %}Proyectos{% endblock %}
+{% block content %}
+<header class="page-head row">
+  <div>
+    <h1>Proyectos de ingeniería</h1>
+    <p class="muted">Cada proyecto con sus apuntes, decisiones y pendientes.</p>
+  </div>
+  <a class="muted small" href="{{ url_for('notes.projects', archivados='0' if show_archived else '1') }}">{{ 'Ocultar archivados' if show_archived else 'Ver archivados' }}</a>
+</header>
+
+<div class="project-grid">
+  {% for p in projects %}
+    <a class="project-card {{ color_class(p.color) }}" href="{{ url_for('notes.project', project_id=p.id) }}">
+      <strong>{{ p.name }}</strong>{% if p.archived %} <span class="chip">archivado</span>{% endif %}
+      {% if p.description %}<span class="muted small clamp2">{{ p.description }}</span>{% endif %}
+      <span class="small">{{ p.total }} nota{{ 's' if p.total != 1 }}{% if p.pending %} · <span class="due soon">{{ p.pending }} pendiente{{ 's' if p.pending != 1 }}</span>{% endif %}</span>
+    </a>
+  {% endfor %}
+  <details class="project-card new">
+    <summary>＋ Nuevo proyecto</summary>
+    <form method="post" action="{{ url_for('notes.create_project') }}" class="stack">
+      {{ csrf() }}
+      <input name="name" placeholder="Nombre" required maxlength="80">
+      <textarea name="description" rows="2" placeholder="Descripción (opcional)" maxlength="500"></textarea>
+      <fieldset class="colors"><legend>Color</legend>
+        {% for c in colors %}<label class="swatch c{{ loop.index0 }}"><input type="radio" name="color" value="{{ c }}" {{ 'checked' if loop.first }}><span></span></label>{% endfor %}
+      </fieldset>
+      <button type="submit" class="primary">Crear</button>
+    </form>
+  </details>
+</div>
+
+<div class="toolbar">
+  <h2>Últimas notas de todos los proyectos</h2>
+  <form method="get" class="filter"><input type="search" name="q" value="{{ q }}" placeholder="Buscar en proyectos…" aria-label="Buscar"></form>
+</div>
+<section class="list">
+  {% for n in recent %}{{ note_item(n, request.full_path.rstrip('?'), show_project=True) }}
+  {% else %}<p class="empty">{{ 'Nada coincide.' if q else 'Aún no hay notas de proyectos.' }}</p>{% endfor %}
+</section>
+{% endblock %}

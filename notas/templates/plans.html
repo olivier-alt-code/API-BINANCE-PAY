@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% from "_macros.html" import csrf %}
+{% block title %}Planificación{% endblock %}
+{% block content %}
+<header class="page-head row">
+  <div><h1>Planificación</h1><p class="muted">Un viaje, una mudanza, un estudio… cualquier cosa con pasos.</p></div>
+  <a class="muted small" href="{{ url_for('plans.index', archivados='0' if archived else '1') }}">{{ 'Ver activos' if archived else 'Ver archivados' }}</a>
+</header>
+
+{% if not archived %}
+<details class="card" {{ 'open' if not plans }}>
+  <summary><strong>＋ Nuevo plan</strong></summary>
+  <form method="post" action="{{ url_for('plans.create') }}" class="stack">
+    {{ csrf() }}
+    <div class="grid2">
+      <input name="title" placeholder="Título del plan" required maxlength="150">
+      <label class="inline-field">Fecha objetivo <input type="date" name="target_date"></label>
+    </div>
+    <textarea name="description" rows="2" placeholder="Objetivo o contexto (opcional)"></textarea>
+    <textarea name="steps" rows="4" placeholder="Pasos, uno por línea (puedes añadir más después)"></textarea>
+    <button type="submit" class="primary">Crear plan</button>
+  </form>
+</details>
+{% endif %}
+
+<div class="plan-grid">
+  {% for p in plans %}
+    {% set due = due_label(p.target_date) if p.steps != p.done_steps else None %}
+    <a class="card plan-card" href="{{ url_for('plans.detail', plan_id=p.id) }}">
+      <strong>{{ p.title }}</strong>
+      {% if p.description %}<span class="muted small clamp2">{{ p.description }}</span>{% endif %}
+      <progress max="{{ p.steps or 1 }}" value="{{ p.done_steps }}"></progress>
+      <span class="small">{{ p.done_steps }}/{{ p.steps }} pasos{% if due %} · <span class="due {{ due[1] }}">{{ due[0] }}</span>{% endif %}</span>
+      {% if p.next_step %}<span class="small muted">Siguiente: {{ p.next_step }}</span>{% endif %}
+    </a>
+  {% else %}
+    <p class="empty">{{ 'No hay planes archivados.' if archived else 'Crea tu primer plan.' }}</p>
+  {% endfor %}
+</div>
+{% endblock %}

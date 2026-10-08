@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% from "_macros.html" import csrf %}
+{% block title %}Configurar{% endblock %}
+{% block content %}
+<form method="post" class="card auth stack">
+  {{ csrf() }}
+  <h1>Bienvenido</h1>
+  <p class="muted">Crea tu contraseña maestra. Protege la app y cifra tus contraseñas guardadas.
+    <strong>No se puede recuperar</strong>: si la olvidas, las contraseñas guardadas se pierden.</p>
+  {% if error %}<div class="flash error">{{ error }}</div>{% endif %}
+  <label>Contraseña maestra <input type="password" name="password" required minlength="8" autofocus autocomplete="new-password"></label>
+  <label>Repítela <input type="password" name="confirm" required minlength="8" autocomplete="new-password"></label>
+  <button type="submit" class="primary">Empezar</button>
+</form>
+{% endblock %}
