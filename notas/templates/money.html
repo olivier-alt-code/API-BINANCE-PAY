@@ -64,9 +64,10 @@
       <label><input type="radio" name="kind" value="gasto" checked><span>− Gasto</span></label>
       <label><input type="radio" name="kind" value="ingreso"><span>+ Ingreso</span></label>
     </div>
-    <input name="amount" inputmode="decimal" placeholder="Monto" required autocomplete="off" class="amount-input">
+    <span class="amount-wrap"><input name="amount" inputmode="decimal" placeholder="Monto" required autocomplete="off" class="amount-input">
+      <button type="button" class="small all-btn" data-fill-all="account_id" title="Usar todo el saldo de la cuenta">Todo</button></span>
     <select name="account_id" required aria-label="Cuenta">
-      {% for a in s.accounts %}<option value="{{ a.id }}">{{ a.name }} ({{ 'Bs' if a.currency == 'VES' else 'USDT' }})</option>{% endfor %}
+      {% for a in s.accounts %}<option value="{{ a.id }}" data-balance="{{ fmt(a.balance) if a.balance > 0 else '' }}">{{ a.name }} ({{ 'Bs' if a.currency == 'VES' else 'USDT' }})</option>{% endfor %}
     </select>
     <input name="category" list="money-categories" placeholder="Categoría" maxlength="40" autocomplete="off">
     <datalist id="money-categories">{% for c in categories %}<option value="{{ c }}">{% endfor %}</datalist>
@@ -81,8 +82,9 @@
   <form method="post" action="{{ url_for('money.create_exchange') }}" class="stack">
     {{ csrf() }}
     <div class="grid2">
-      <label>Sale de <select name="from_id">{% for a in s.accounts %}<option value="{{ a.id }}">{{ a.name }} ({{ 'Bs' if a.currency == 'VES' else 'USDT' }})</option>{% endfor %}</select></label>
-      <label>Monto que sale <input name="amount_out" inputmode="decimal" required autocomplete="off"></label>
+      <label>Sale de <select name="from_id">{% for a in s.accounts %}<option value="{{ a.id }}" data-balance="{{ fmt(a.balance) if a.balance > 0 else '' }}">{{ a.name }} ({{ 'Bs' if a.currency == 'VES' else 'USDT' }})</option>{% endfor %}</select></label>
+      <label>Monto que sale <span class="amount-wrap"><input name="amount_out" inputmode="decimal" required autocomplete="off">
+        <button type="button" class="small all-btn" data-fill-all="from_id" title="Usar todo el saldo de la cuenta">Todo</button></span></label>
       <label>Entra en <select name="to_id">{% for a in s.accounts %}<option value="{{ a.id }}" {{ 'selected' if loop.index == 2 }}>{{ a.name }} ({{ 'Bs' if a.currency == 'VES' else 'USDT' }})</option>{% endfor %}</select></label>
       <label>Monto que entra <input name="amount_in" inputmode="decimal" autocomplete="off" placeholder="igual si es la misma moneda"></label>
     </div>

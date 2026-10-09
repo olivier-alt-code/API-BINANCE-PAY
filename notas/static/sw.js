@@ -1,7 +1,7 @@
 // Service worker: offline reading (cached pages) and offline writing (outbox + sync).
 importScripts("/static/outbox.js");
 
-const VERSION = "v6";
+const VERSION = "v7";
 const STATIC = `notas-static-${VERSION}`;
 const PAGES = "notas-pages";
 const PRECACHE = [

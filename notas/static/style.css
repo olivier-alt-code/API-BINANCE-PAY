@@ -616,3 +616,9 @@ a.project-card:hover { text-decoration: none; transform: translateY(-2px); box-s
 .calc-out { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr)); gap: 10px; }
 .calc-row { display: grid; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px 12px; }
 .calc-row strong { font-size: 1.1rem; font-variant-numeric: tabular-nums; }
+.amount-wrap { position: relative; display: block; }
+.amount-wrap input { padding-right: 70px; }
+.all-btn { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); min-height: 0 !important; padding: 4px 10px; color: var(--accent); border-color: var(--accent); }
+.all-btn:hover { background: var(--accent-soft); }
+.all-btn:active { transform: translateY(-50%) scale(.97); }
+@media (max-width: 760px) { .movement-form .amount-wrap { grid-column: 1 / -1; } }

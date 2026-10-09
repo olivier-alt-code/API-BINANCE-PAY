@@ -230,3 +230,17 @@
   }
   amount.addEventListener("input", render); from.addEventListener("change", render); render();
 })();
+
+// "Todo": fill the amount with the whole balance of the selected account.
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-fill-all]");
+  if (!btn) return;
+  const form = btn.form;
+  const select = form.querySelector(`select[name="${btn.dataset.fillAll}"]`);
+  const input = btn.parentElement.querySelector("input");
+  const balance = select?.selectedOptions[0]?.dataset.balance;
+  if (!balance) { btn.textContent = "Sin saldo"; setTimeout(() => { btn.textContent = "Todo"; }, 1200); return; }
+  input.value = balance;
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  input.focus();
+});
